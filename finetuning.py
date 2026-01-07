@@ -261,6 +261,8 @@ def parse_args():
                         help="Sample N language pairs from the set (default: use all in set)")
     parser.add_argument("--val-pair", type=str, default="eng_Latn-deu_Latn",
                         help="Language pair to use for validation")
+    parser.add_argument("--val-size", type=int, default=128,
+                        help="Number of validation sentence pairs")
     parser.add_argument("--val-batch-tokens", type=int, default=None,
                         help="Max tokens per validation batch (default: same as --max-batch-tokens)")
     parser.add_argument("--shuffle-buffer", type=int, default=1000,
@@ -347,20 +349,36 @@ def main():
 
     # Load validation set from single pair (faster)
     val_batch_tokens = args.val_batch_tokens if args.val_batch_tokens is not None else args.max_batch_tokens
-    print(f"Creating validation set from {args.val_pair} (~{val_batch_tokens} tokens)...")
+    print(f"Creating validation set from {args.val_pair} ({args.val_size} pairs, {val_batch_tokens} tokens/batch)...")
     val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=args.val_pair, split="train", streaming=True)
     val_iter = iter(val_dataset)
-    val_left, val_right = [], []
-    total_tokens = 0
-    while total_tokens < val_batch_tokens:
+    val_left, val_right, val_tokens = [], [], []
+    for _ in range(args.val_size):
         sample = next(val_iter)
         src, tgt = sample["source_text"], sample["target_text"]
-        total_tokens += max(estimate_tokens(src, args.max_length), estimate_tokens(tgt, args.max_length))
         val_left.append(src)
         val_right.append(tgt)
-    print(f"Validation set: {len(val_left)} pairs")
-    val_batch_l = tokenize(val_left, args.max_length, args.val_device)
-    val_batch_r = tokenize(val_right, args.max_length, args.val_device)
+        val_tokens.append(max(estimate_tokens(src, args.max_length), estimate_tokens(tgt, args.max_length)))
+
+    # Pre-batch validation data by tokens
+    val_batches = []
+    batch_left, batch_right, batch_tok = [], [], 0
+    for src, tgt, tok in zip(val_left, val_right, val_tokens):
+        if batch_tok + tok > val_batch_tokens and batch_left:
+            val_batches.append((
+                tokenize(batch_left, args.max_length, args.val_device),
+                tokenize(batch_right, args.max_length, args.val_device)
+            ))
+            batch_left, batch_right, batch_tok = [], [], 0
+        batch_left.append(src)
+        batch_right.append(tgt)
+        batch_tok += tok
+    if batch_left:
+        val_batches.append((
+            tokenize(batch_left, args.max_length, args.val_device),
+            tokenize(batch_right, args.max_length, args.val_device)
+        ))
+    print(f"Validation: {len(val_batches)} batches")
 
     # Create training iterator
     data_iter = iter(dataset)
@@ -374,19 +392,23 @@ def main():
             # Different devices: copy weights and run on validation model
             state = {k: v.to(args.val_device) for k, v in embedder.proj.state_dict().items()}
             val_embedder.proj.load_state_dict(state)
-            with torch.no_grad():
-                val_a = val_embedder(**val_batch_l)
-                val_b = val_embedder(**val_batch_r)
-                loss = contrastive_loss(val_a, val_b)
+            model = val_embedder
         else:
             # Same device: use embedder directly in eval mode
             embedder.eval()
-            with torch.no_grad():
-                val_a = embedder(**val_batch_l)
-                val_b = embedder(**val_batch_r)
-                loss = contrastive_loss(val_a, val_b)
+            model = embedder
+
+        total_loss = 0.0
+        with torch.no_grad():
+            for val_batch_l, val_batch_r in val_batches:
+                val_a = model(**val_batch_l)
+                val_b = model(**val_batch_r)
+                total_loss += contrastive_loss(val_a, val_b).item()
+
+        if val_embedder is None:
             embedder.train()
-        val_loss_result[0] = loss.item()
+
+        val_loss_result[0] = total_loss / len(val_batches)
 
     # Language pair statistics
     lang_pair_counts = Counter()
