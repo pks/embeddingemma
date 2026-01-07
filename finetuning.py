@@ -125,6 +125,68 @@ LANG_PAIRS = [
     "eng_Latn-zho_Zyyy", "eng_Latn-zpa_Latn", "eng_Latn-zsm_Latn", "eng_Latn-zul_Latn",
 ]
 
+# Curated high-resource language pairs (69 pairs)
+# Chinese, Spanish, Hindi, Portuguese, Bengali, Russian, Japanese, Punjabi, Vietnamese,
+# Turkish, Arabic, Marathi, Telugu, Korean, Tamil, Urdu, German, Indonesian, French,
+# Javanese, Persian, Italian, Hausa, Gujarati, Bhojpuri
+CURATED_LANG_PAIRS = [
+    # Arabic variants
+    "acm_Arab-eng_Latn", "aeb_Arab-eng_Latn", "apc_Arab-eng_Latn", "ara_Arab-eng_Latn",
+    "arb_Arab-eng_Latn", "arq_Arab-eng_Latn", "ars_Arab-eng_Latn", "ary_Arab-eng_Latn",
+    "arz_Arab-eng_Latn", "eng_Latn-aeb_Arab", "eng_Latn-arb_Arab", "eng_Latn-ars_Arab",
+    "eng_Latn-arz_Arab",
+    # Bengali
+    "ben_Beng-eng_Latn", "eng_Latn-ben_Beng",
+    # Bhojpuri
+    "bho_Deva-eng_Latn", "eng_Latn-bho_Deva",
+    # Chinese variants
+    "cmn_Hani-eng_Latn", "eng_Latn-cmn_Hani", "eng_Latn-lzh_Hani", "eng_Latn-wuu_Hani",
+    "eng_Latn-yue_Hani", "eng_Latn-zho_Hani", "eng_Latn-zho_Hans", "eng_Latn-zho_Hant",
+    "eng_Latn-zho_Zyyy",
+    # German
+    "deu_Latn-eng_Latn", "eng_Latn-deu_Latn",
+    # Persian
+    "fas_Arab-eng_Latn", "eng_Latn-fas_Arab", "eng_Latn-prs_Arab",
+    # French
+    "fra_Latn-eng_Latn", "eng_Latn-fra_Latn",
+    # Gujarati
+    "eng_Latn-guj_Gujr",
+    # Hausa
+    "eng_Latn-hau_Latn",
+    # Hindi
+    "hin_Deva-eng_Latn", "eng_Latn-hin_Deva", "eng_Latn-hin_Latn",
+    # Indonesian
+    "ind_Latn-eng_Latn", "eng_Latn-ind_Latn",
+    # Italian
+    "ita_Latn-eng_Latn", "eng_Latn-ita_Latn",
+    # Javanese
+    "eng_Latn-jav_Latn",
+    # Japanese
+    "jpn_Jpan-eng_Latn", "eng_Latn-jpn_Jpan",
+    # Korean
+    "kor_Hang-eng_Latn", "kor_Zyyy-eng_Latn", "eng_Latn-kor_Hang", "eng_Latn-kor_Zyyy",
+    # Marathi
+    "eng_Latn-mar_Deva", "eng_Latn-mar_Latn",
+    # Punjabi
+    "eng_Latn-pan_Guru", "eng_Latn-pan_Latn", "eng_Latn-pnb_Arab",
+    # Portuguese
+    "por_Latn-eng_Latn", "eng_Latn-por_Latn",
+    # Russian
+    "rus_Cyrl-eng_Latn", "eng_Latn-rus_Cyrl",
+    # Spanish
+    "spa_Latn-eng_Latn", "eng_Latn-spa_Latn",
+    # Tamil
+    "eng_Latn-tam_Taml",
+    # Telugu
+    "eng_Latn-tel_Latn", "eng_Latn-tel_Telu",
+    # Turkish
+    "tur_Latn-eng_Latn", "eng_Latn-tur_Latn",
+    # Urdu
+    "eng_Latn-urd_Arab", "eng_Latn-urd_Latn",
+    # Vietnamese
+    "vie_Latn-eng_Latn", "eng_Latn-vie_Latn",
+]
+
 
 class Embedder(nn.Module):
     def __init__(self, base_model, out_dim=768, layer=-4):
@@ -193,8 +255,10 @@ def parse_args():
                         help="Save checkpoint every N steps")
 
     # Data
+    parser.add_argument("--lang-set", type=str, default="all", choices=["all", "curated"],
+                        help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
     parser.add_argument("--num-langs", type=int, default=None,
-                        help="Sample N language pairs (default: all)")
+                        help="Sample N language pairs from the set (default: use all in set)")
     parser.add_argument("--val-pair", type=str, default="eng_Latn-deu_Latn",
                         help="Language pair to use for validation")
     parser.add_argument("--val-size", type=int, default=32,
@@ -255,14 +319,17 @@ def main():
     opt = torch.optim.AdamW(embedder.parameters(), lr=args.lr)
 
     # Select language pairs
+    base_pairs = CURATED_LANG_PAIRS if args.lang_set == "curated" else LANG_PAIRS
+    set_name = "curated" if args.lang_set == "curated" else "all"
+
     if args.num_langs is not None:
-        selected_pairs = random.sample(LANG_PAIRS, min(args.num_langs, len(LANG_PAIRS)))
-        print(f"Sampled {len(selected_pairs)} language pairs:")
+        selected_pairs = random.sample(base_pairs, min(args.num_langs, len(base_pairs)))
+        print(f"Sampled {len(selected_pairs)} from {set_name} set ({len(base_pairs)} pairs):")
         for lp in selected_pairs:
             print(f"  {lp}")
     else:
-        selected_pairs = LANG_PAIRS
-        print(f"Using all {len(selected_pairs)} language pairs")
+        selected_pairs = base_pairs
+        print(f"Using {set_name} set: {len(selected_pairs)} language pairs")
 
     # Load training datasets
     print("Loading training datasets...")
