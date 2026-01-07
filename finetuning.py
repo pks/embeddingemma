@@ -263,6 +263,8 @@ def parse_args():
                         help="Language pair to use for validation")
     parser.add_argument("--val-size", type=int, default=32,
                         help="Number of validation samples")
+    parser.add_argument("--shuffle-buffer", type=int, default=1000,
+                        help="Shuffle buffer size (lower = faster startup)")
 
     # Output
     parser.add_argument("--output-dir", type=str, default=".",
@@ -311,9 +313,12 @@ def main():
     else:
         val_base = base
 
-    # Create embedders
+    # Create embedder(s)
     embedder = Embedder(base, out_dim=args.out_dim, layer=args.layer).to(dtype=torch.bfloat16, device=args.train_device).train()
-    val_embedder = Embedder(val_base, out_dim=args.out_dim, layer=args.layer).to(dtype=torch.bfloat16, device=args.val_device).eval()
+    if args.val_device != args.train_device:
+        val_embedder = Embedder(val_base, out_dim=args.out_dim, layer=args.layer).to(dtype=torch.bfloat16, device=args.val_device).eval()
+    else:
+        val_embedder = None  # Use embedder for validation when on same device
 
     # Optimizer
     opt = torch.optim.AdamW(embedder.parameters(), lr=args.lr)
@@ -338,7 +343,7 @@ def main():
         for lp in tqdm(selected_pairs, desc="Loading language pairs")
     ]
     dataset = interleave_datasets(datasets)
-    dataset = dataset.shuffle(seed=args.seed, buffer_size=10000)
+    dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
     # Load validation set from single pair (faster)
     print(f"Creating validation set from {args.val_pair}...")
@@ -360,12 +365,22 @@ def main():
     val_loss_result = [None]
 
     def run_validation():
-        state = {k: v.to(args.val_device) for k, v in embedder.proj.state_dict().items()}
-        val_embedder.proj.load_state_dict(state)
-        with torch.no_grad():
-            val_a = val_embedder(**val_batch_l)
-            val_b = val_embedder(**val_batch_r)
-            loss = contrastive_loss(val_a, val_b)
+        if val_embedder is not None:
+            # Different devices: copy weights and run on validation model
+            state = {k: v.to(args.val_device) for k, v in embedder.proj.state_dict().items()}
+            val_embedder.proj.load_state_dict(state)
+            with torch.no_grad():
+                val_a = val_embedder(**val_batch_l)
+                val_b = val_embedder(**val_batch_r)
+                loss = contrastive_loss(val_a, val_b)
+        else:
+            # Same device: use embedder directly in eval mode
+            embedder.eval()
+            with torch.no_grad():
+                val_a = embedder(**val_batch_l)
+                val_b = embedder(**val_batch_r)
+                loss = contrastive_loss(val_a, val_b)
+            embedder.train()
         val_loss_result[0] = loss.item()
 
     # Language pair statistics
