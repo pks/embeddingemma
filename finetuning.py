@@ -261,8 +261,8 @@ def parse_args():
                         help="Sample N language pairs from the set (default: use all in set)")
     parser.add_argument("--val-pair", type=str, default="eng_Latn-deu_Latn",
                         help="Language pair to use for validation")
-    parser.add_argument("--val-size", type=int, default=32,
-                        help="Number of validation samples")
+    parser.add_argument("--val-batch-tokens", type=int, default=None,
+                        help="Max tokens per validation batch (default: same as --max-batch-tokens)")
     parser.add_argument("--shuffle-buffer", type=int, default=1000,
                         help="Shuffle buffer size (lower = faster startup)")
 
@@ -346,14 +346,19 @@ def main():
     dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
     # Load validation set from single pair (faster)
-    print(f"Creating validation set from {args.val_pair}...")
+    val_batch_tokens = args.val_batch_tokens if args.val_batch_tokens is not None else args.max_batch_tokens
+    print(f"Creating validation set from {args.val_pair} (~{val_batch_tokens} tokens)...")
     val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=args.val_pair, split="train", streaming=True)
     val_iter = iter(val_dataset)
     val_left, val_right = [], []
-    for _ in tqdm(range(args.val_size), desc="Validation samples"):
+    total_tokens = 0
+    while total_tokens < val_batch_tokens:
         sample = next(val_iter)
-        val_left.append(sample["source_text"])
-        val_right.append(sample["target_text"])
+        src, tgt = sample["source_text"], sample["target_text"]
+        total_tokens += max(estimate_tokens(src, args.max_length), estimate_tokens(tgt, args.max_length))
+        val_left.append(src)
+        val_right.append(tgt)
+    print(f"Validation set: {len(val_left)} pairs")
     val_batch_l = tokenize(val_left, args.max_length, args.val_device)
     val_batch_r = tokenize(val_right, args.max_length, args.val_device)
 
