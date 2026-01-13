@@ -544,17 +544,17 @@ def main():
             # Launch validation
             val_thread = threading.Thread(target=run_validation)
             val_thread.start()
+            val_thread.join()
 
-            # For first checkpoint, wait for result
-            if is_first:
-                val_thread.join()
-                pbar.set_postfix(train=f"{loss.detach().item():.4f}", val=f"{val_loss_result[0]:.4f}")
+            # Update progress bar with validation result
+            pbar.set_postfix(train=f"{loss.detach().item():.4f}", val=f"{val_loss_result[0]:.4f}")
 
             # Save checkpoint
             ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
             torch.save(embedder.state_dict(), ckpt_path)
 
-            # Print language stats
+            # Print checkpoint info
+            print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}")
             print_lang_stats()
 
             last_checkpoint_tokens = tokens_processed
