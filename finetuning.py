@@ -197,6 +197,32 @@ CURATED_LANG_PAIRS = [
     "vie_Latn-eng_Latn", "eng_Latn-vie_Latn",
 ]
 
+# Default validation pairs: 10 diverse languages, both directions (20 pairs)
+# Covers: CJK (ja, zh, ko), Arabic script (ar), Devanagari (hi), Cyrillic (ru),
+# Latin (es, de, vi, tr) - representing Romance, Germanic, Tonal, Turkic
+VALIDATION_PAIRS = [
+    # Japanese
+    "jpn_Jpan-eng_Latn", "eng_Latn-jpn_Jpan",
+    # Chinese (Mandarin)
+    "cmn_Hani-eng_Latn", "eng_Latn-cmn_Hani",
+    # Arabic (Standard)
+    "arb_Arab-eng_Latn", "eng_Latn-arb_Arab",
+    # Hindi
+    "hin_Deva-eng_Latn", "eng_Latn-hin_Deva",
+    # Russian
+    "rus_Cyrl-eng_Latn", "eng_Latn-rus_Cyrl",
+    # Spanish
+    "spa_Latn-eng_Latn", "eng_Latn-spa_Latn",
+    # German
+    "deu_Latn-eng_Latn", "eng_Latn-deu_Latn",
+    # Korean
+    "kor_Hang-eng_Latn", "eng_Latn-kor_Hang",
+    # Vietnamese
+    "vie_Latn-eng_Latn", "eng_Latn-vie_Latn",
+    # Turkish
+    "tur_Latn-eng_Latn", "eng_Latn-tur_Latn",
+]
+
 
 class Embedder(nn.Module):
     def __init__(self, base_model, out_dim=768, layer=-4):
@@ -282,7 +308,7 @@ def parse_args():
                         help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
     parser.add_argument("--num-langs", type=int, default=None,
                         help="Sample N language pairs from the set (default: use all in set)")
-    parser.add_argument("--val-pairs", type=str, nargs="+", default=["eng_Latn-deu_Latn"],
+    parser.add_argument("--val-pairs", type=str, nargs="+", default=VALIDATION_PAIRS,
                         help="Language pairs for validation (budget shared between them)")
     parser.add_argument("--val-size", type=int, default=128,
                         help="Total number of validation sentence pairs (shared across all val-pairs)")
