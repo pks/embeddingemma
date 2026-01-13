@@ -289,6 +289,8 @@ def parse_args():
                         help="Max tokens per validation batch (default: same as --max-batch-tokens)")
     parser.add_argument("--shuffle-buffer", type=int, default=1000,
                         help="Shuffle buffer size (lower = faster startup)")
+    parser.add_argument("--adaptive-sampling", action="store_true",
+                        help="Adjust sampling weights based on validation loss (oversample hard pairs)")
 
     # Output
     parser.add_argument("--output-dir", type=str, default=".",
@@ -362,12 +364,25 @@ def main():
 
     # Load training datasets
     print("Loading training datasets...")
-    datasets = [
-        load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
-        for lp in tqdm(selected_pairs, desc="Loading language pairs")
-    ]
-    dataset = interleave_datasets(datasets)
-    dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
+    if args.adaptive_sampling:
+        # Keep individual iterators for weighted sampling
+        print("Adaptive sampling enabled - keeping per-pair iterators")
+        pair_iterators = {}
+        for lp in tqdm(selected_pairs, desc="Loading language pairs"):
+            ds = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
+            ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
+            pair_iterators[lp] = iter(ds)
+        sampling_weights = {lp: 1.0 for lp in selected_pairs}
+        data_iter = None  # Will sample manually in get_batch
+    else:
+        datasets = [
+            load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
+            for lp in tqdm(selected_pairs, desc="Loading language pairs")
+        ]
+        dataset = interleave_datasets(datasets)
+        dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
+        pair_iterators = None
+        sampling_weights = None
 
     # Load validation set from multiple pairs (budget shared)
     val_batch_tokens = args.val_batch_tokens if args.val_batch_tokens is not None else args.max_batch_tokens
@@ -415,8 +430,9 @@ def main():
         short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
         print(f"  {short_pair}: {len(val_left)} pairs, {len(batches)} batches")
 
-    # Create training iterator
-    data_iter = iter(dataset)
+    # Create training iterator (only for non-adaptive mode)
+    if not args.adaptive_sampling:
+        data_iter = iter(dataset)
 
     # Async validation state
     val_thread = None
@@ -460,6 +476,15 @@ def main():
     skipped_too_long = [0]
     stats_lock = threading.Lock()
 
+    def sample_from_pair():
+        """Sample one example from pair iterators based on weights."""
+        pairs = list(sampling_weights.keys())
+        weights = [sampling_weights[p] for p in pairs]
+        total_w = sum(weights)
+        probs = [w / total_w for w in weights]
+        chosen_pair = random.choices(pairs, weights=probs, k=1)[0]
+        return next(pair_iterators[chosen_pair])
+
     def get_batch():
         left, right = [], []
         total_tokens = 0
@@ -468,7 +493,10 @@ def main():
         batch_skipped = 0
         batch_examples = 0
         while total_tokens < args.max_batch_tokens:
-            sample = next(data_iter)
+            if args.adaptive_sampling:
+                sample = sample_from_pair()
+            else:
+                sample = next(data_iter)
             src, tgt = sample["source_text"], sample["target_text"]
             src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
             if src_tok > args.max_length or tgt_tok > args.max_length:
@@ -510,7 +538,27 @@ def main():
                 for val_pair, loss in val_loss_by_pair.items():
                     src_lang, tgt_lang = val_pair.split("-")
                     short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-                    print(f"    {short_pair}: {loss:.4f}", flush=True)
+                    weight_str = ""
+                    if args.adaptive_sampling and val_pair in sampling_weights:
+                        weight_str = f" (weight: {sampling_weights[val_pair]:.2f})"
+                    print(f"    {short_pair}: {loss:.4f}{weight_str}", flush=True)
+
+    def update_sampling_weights():
+        """Update sampling weights based on validation loss (higher loss = higher weight)."""
+        if not args.adaptive_sampling or not val_loss_by_pair:
+            return
+        # Only update weights for pairs that are in both training and validation
+        for val_pair, loss in val_loss_by_pair.items():
+            if val_pair in sampling_weights:
+                # Weight proportional to loss (but clamp to avoid extremes)
+                sampling_weights[val_pair] = max(0.1, min(10.0, loss))
+        # Print updated weights
+        print("  Updated sampling weights:", flush=True)
+        total_w = sum(sampling_weights.values())
+        for pair in sorted(sampling_weights.keys()):
+            if pair in val_loss_by_pair:
+                prob = sampling_weights[pair] / total_w * 100
+                print(f"    {pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
@@ -600,6 +648,7 @@ def main():
             pbar.clear()
             print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}", flush=True)
             print_stats()
+            update_sampling_weights()
             pbar.refresh()
 
             last_checkpoint_tokens = tokens_processed
