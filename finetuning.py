@@ -281,10 +281,10 @@ def parse_args():
                         help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
     parser.add_argument("--num-langs", type=int, default=None,
                         help="Sample N language pairs from the set (default: use all in set)")
-    parser.add_argument("--val-pair", type=str, default="eng_Latn-deu_Latn",
-                        help="Language pair to use for validation")
+    parser.add_argument("--val-pairs", type=str, nargs="+", default=["eng_Latn-deu_Latn"],
+                        help="Language pairs for validation (budget shared between them)")
     parser.add_argument("--val-size", type=int, default=128,
-                        help="Number of validation sentence pairs")
+                        help="Total number of validation sentence pairs (shared across all val-pairs)")
     parser.add_argument("--val-batch-tokens", type=int, default=None,
                         help="Max tokens per validation batch (default: same as --max-batch-tokens)")
     parser.add_argument("--shuffle-buffer", type=int, default=1000,
@@ -369,21 +369,28 @@ def main():
     dataset = interleave_datasets(datasets)
     dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
-    # Load validation set from single pair (faster)
+    # Load validation set from multiple pairs (budget shared)
     val_batch_tokens = args.val_batch_tokens if args.val_batch_tokens is not None else args.max_batch_tokens
-    print(f"Creating validation set from {args.val_pair} ({args.val_size} pairs, {val_batch_tokens} tokens/batch)...")
-    val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=args.val_pair, split="train", streaming=True)
-    val_iter = iter(val_dataset)
+    val_pairs = args.val_pairs
+    per_pair_size = args.val_size // len(val_pairs)
+    print(f"Creating validation set from {len(val_pairs)} pairs ({args.val_size} total, {per_pair_size} each, {val_batch_tokens} tokens/batch)...")
+
     val_left, val_right, val_tokens = [], [], []
-    while len(val_left) < args.val_size:
-        sample = next(val_iter)
-        src, tgt = sample["source_text"], sample["target_text"]
-        src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
-        if src_tok > args.max_length or tgt_tok > args.max_length:
-            continue
-        val_left.append(src)
-        val_right.append(tgt)
-        val_tokens.append(max(src_tok, tgt_tok))
+    for val_pair in val_pairs:
+        val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=val_pair, split="train", streaming=True)
+        val_iter = iter(val_dataset)
+        pair_count = 0
+        while pair_count < per_pair_size:
+            sample = next(val_iter)
+            src, tgt = sample["source_text"], sample["target_text"]
+            src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
+            if src_tok > args.max_length or tgt_tok > args.max_length:
+                continue
+            val_left.append(src)
+            val_right.append(tgt)
+            val_tokens.append(max(src_tok, tgt_tok))
+            pair_count += 1
+    print(f"  Loaded {len(val_left)} validation pairs from: {', '.join(val_pairs)}")
 
     # Pre-batch validation data by tokens
     val_batches = []
