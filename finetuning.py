@@ -375,12 +375,13 @@ def main():
     per_pair_size = args.val_size // len(val_pairs)
     print(f"Creating validation set from {len(val_pairs)} pairs ({args.val_size} total, {per_pair_size} each, {val_batch_tokens} tokens/batch)...")
 
-    val_left, val_right, val_tokens = [], [], []
+    # Load and batch per language pair (for per-pair loss computation)
+    val_batches_by_pair = {}
     for val_pair in val_pairs:
         val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=val_pair, split="train", streaming=True)
         val_iter = iter(val_dataset)
-        pair_count = 0
-        while pair_count < per_pair_size:
+        val_left, val_right, val_tokens = [], [], []
+        while len(val_left) < per_pair_size:
             sample = next(val_iter)
             src, tgt = sample["source_text"], sample["target_text"]
             src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
@@ -389,35 +390,38 @@ def main():
             val_left.append(src)
             val_right.append(tgt)
             val_tokens.append(max(src_tok, tgt_tok))
-            pair_count += 1
-    print(f"  Loaded {len(val_left)} validation pairs from: {', '.join(val_pairs)}")
 
-    # Pre-batch validation data by tokens
-    val_batches = []
-    batch_left, batch_right, batch_tok = [], [], 0
-    for src, tgt, tok in zip(val_left, val_right, val_tokens):
-        if batch_tok + tok > val_batch_tokens and batch_left:
-            val_batches.append((
+        # Batch this pair's data
+        batches = []
+        batch_left, batch_right, batch_tok = [], [], 0
+        for src, tgt, tok in zip(val_left, val_right, val_tokens):
+            if batch_tok + tok > val_batch_tokens and batch_left:
+                batches.append((
+                    tokenize(batch_left, args.max_length, args.val_device),
+                    tokenize(batch_right, args.max_length, args.val_device)
+                ))
+                batch_left, batch_right, batch_tok = [], [], 0
+            batch_left.append(src)
+            batch_right.append(tgt)
+            batch_tok += tok
+        if batch_left:
+            batches.append((
                 tokenize(batch_left, args.max_length, args.val_device),
                 tokenize(batch_right, args.max_length, args.val_device)
             ))
-            batch_left, batch_right, batch_tok = [], [], 0
-        batch_left.append(src)
-        batch_right.append(tgt)
-        batch_tok += tok
-    if batch_left:
-        val_batches.append((
-            tokenize(batch_left, args.max_length, args.val_device),
-            tokenize(batch_right, args.max_length, args.val_device)
-        ))
-    print(f"Validation: {len(val_batches)} batches")
+        val_batches_by_pair[val_pair] = batches
+        # Normalize pair name for display
+        src_lang, tgt_lang = val_pair.split("-")
+        short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+        print(f"  {short_pair}: {len(val_left)} pairs, {len(batches)} batches")
 
     # Create training iterator
     data_iter = iter(dataset)
 
     # Async validation state
     val_thread = None
-    val_loss_result = [None]
+    val_loss_result = [None]  # overall loss
+    val_loss_by_pair = {}  # per-pair loss
 
     def run_validation():
         if val_embedder is not None:
@@ -431,16 +435,22 @@ def main():
             model = embedder
 
         total_loss = 0.0
+        total_batches = 0
         with torch.no_grad():
-            for val_batch_l, val_batch_r in val_batches:
-                val_a = model(**val_batch_l)
-                val_b = model(**val_batch_r)
-                total_loss += contrastive_loss(val_a, val_b).item()
+            for val_pair, batches in val_batches_by_pair.items():
+                pair_loss = 0.0
+                for val_batch_l, val_batch_r in batches:
+                    val_a = model(**val_batch_l)
+                    val_b = model(**val_batch_r)
+                    pair_loss += contrastive_loss(val_a, val_b).item()
+                val_loss_by_pair[val_pair] = pair_loss / len(batches) if batches else 0.0
+                total_loss += pair_loss
+                total_batches += len(batches)
 
         if val_embedder is None:
             embedder.train()
 
-        val_loss_result[0] = total_loss / len(val_batches)
+        val_loss_result[0] = total_loss / total_batches if total_batches > 0 else 0.0
 
     # Statistics
     lang_tokens = Counter()  # tokens per language
@@ -495,6 +505,12 @@ def main():
             print("  Examples per language pair:", flush=True)
             for pair, count in pair_examples.most_common(top_n):
                 print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
+            if val_loss_by_pair:
+                print("  Validation loss per pair:", flush=True)
+                for val_pair, loss in val_loss_by_pair.items():
+                    src_lang, tgt_lang = val_pair.split("-")
+                    short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+                    print(f"    {short_pair}: {loss:.4f}", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
