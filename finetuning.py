@@ -577,11 +577,15 @@ def main():
                 # Compact: top languages on one line
                 top_langs = [f"{lang}:{toks//1000}k" for lang, toks in lang_tokens.most_common(top_n)]
                 print(f"  Top langs: {', '.join(top_langs)}", flush=True)
-            # Validation loss per pair
+            # Validation loss per pair (sorted by normalized pair name)
             if val_loss_by_pair:
+                def sort_key(item):
+                    src, tgt = item[0].split("-")
+                    return f"{normalize_lang(src)}-{normalize_lang(tgt)}"
+                sorted_losses = sorted(val_loss_by_pair.items(), key=sort_key)
                 if args.verbose:
                     print("  Validation loss per pair:", flush=True)
-                    for val_pair, loss in val_loss_by_pair.items():
+                    for val_pair, loss in sorted_losses:
                         src_lang, tgt_lang = val_pair.split("-")
                         short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
                         weight_str = ""
@@ -591,7 +595,7 @@ def main():
                 else:
                     # Compact: multiple per line
                     loss_items = []
-                    for val_pair, loss in val_loss_by_pair.items():
+                    for val_pair, loss in sorted_losses:
                         src_lang, tgt_lang = val_pair.split("-")
                         short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
                         loss_items.append(f"{short_pair}:{loss:.3f}")
@@ -617,12 +621,14 @@ def main():
         if args.verbose:
             print(f"  Updated sampling weights (non-validated: {mean_weight:.2f}):", flush=True)
             total_w = sum(sampling_weights.values())
-            for pair in sorted(sampling_weights.keys()):
-                if pair in val_loss_by_pair:
-                    src_lang, tgt_lang = pair.split("-")
-                    short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-                    prob = sampling_weights[pair] / total_w * 100
-                    print(f"    {short_pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
+            # Sort by normalized pair name
+            validated_pairs = [(p, sampling_weights[p]) for p in sampling_weights if p in val_loss_by_pair]
+            validated_pairs.sort(key=lambda x: f"{normalize_lang(x[0].split('-')[0])}-{normalize_lang(x[0].split('-')[1])}")
+            for pair, weight in validated_pairs:
+                src_lang, tgt_lang = pair.split("-")
+                short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+                prob = weight / total_w * 100
+                print(f"    {short_pair}: {weight:.2f} ({prob:.1f}%)", flush=True)
         else:
             print(f"  Adaptive weights updated (base: {mean_weight:.2f})", flush=True)
 
