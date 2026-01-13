@@ -468,12 +468,11 @@ def main():
             total_toks = sum(lang_tokens.values())
             total_sents = sum(lang_counts.values())
             avg_tokens = total_toks / total_sents if total_sents > 0 else 0
-            print(f"\nLanguage stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):")
+            tqdm.write(f"Language stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):")
             for lang, sents in lang_counts.most_common(top_n):
                 toks = lang_tokens[lang]
                 lang_avg = toks / sents
-                print(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)")
-            print()
+                tqdm.write(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)")
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
@@ -485,11 +484,17 @@ def main():
                 left, right, batch_tokens = get_batch()
                 batch_l = tokenize(left, args.max_length, args.train_device)
                 batch_r = tokenize(right, args.max_length, args.train_device)
-                batch_queue.put((batch_l, batch_r, batch_tokens))
+                # Use timeout to allow checking stop_prefetch
+                while not stop_prefetch.is_set():
+                    try:
+                        batch_queue.put((batch_l, batch_r, batch_tokens), timeout=0.1)
+                        break
+                    except:
+                        pass
             except StopIteration:
                 break
 
-    prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
+    prefetch_thread = threading.Thread(target=prefetch_worker)
     prefetch_thread.start()
 
     # Training loop
@@ -554,7 +559,7 @@ def main():
             torch.save(embedder.state_dict(), ckpt_path)
 
             # Print checkpoint info
-            print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}")
+            tqdm.write(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}")
             print_lang_stats()
 
             last_checkpoint_tokens = tokens_processed
@@ -563,6 +568,7 @@ def main():
 
     # Cleanup
     stop_prefetch.set()
+    prefetch_thread.join()
     if val_thread is not None:
         val_thread.join()
 
