@@ -220,9 +220,9 @@ def contrastive_loss(a, b, temp=0.05):
     return (loss_i + loss_j) / 2
 
 
-def estimate_tokens(text, max_len):
+def estimate_tokens(text):
     """Fast token estimate: ~4 chars per token for LLaMA."""
-    return min(len(text) // 4 + 1, max_len)
+    return len(text) // 4 + 1
 
 
 def parse_args():
@@ -353,12 +353,15 @@ def main():
     val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=args.val_pair, split="train", streaming=True)
     val_iter = iter(val_dataset)
     val_left, val_right, val_tokens = [], [], []
-    for _ in range(args.val_size):
+    while len(val_left) < args.val_size:
         sample = next(val_iter)
         src, tgt = sample["source_text"], sample["target_text"]
+        src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
+        if src_tok > args.max_length or tgt_tok > args.max_length:
+            continue
         val_left.append(src)
         val_right.append(tgt)
-        val_tokens.append(max(estimate_tokens(src, args.max_length), estimate_tokens(tgt, args.max_length)))
+        val_tokens.append(max(src_tok, tgt_tok))
 
     # Pre-batch validation data by tokens
     val_batches = []
@@ -412,26 +415,33 @@ def main():
 
     # Language pair statistics
     lang_pair_counts = Counter()
-    lang_pair_lock = threading.Lock()
+    skipped_too_long = [0]
+    stats_lock = threading.Lock()
 
     def get_batch():
         left, right = [], []
         total_tokens = 0
         batch_counts = Counter()
+        batch_skipped = 0
         while total_tokens < args.max_batch_tokens:
             sample = next(data_iter)
             src, tgt = sample["source_text"], sample["target_text"]
+            src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
+            if src_tok > args.max_length or tgt_tok > args.max_length:
+                batch_skipped += 1
+                continue
             lang_pair = f"{sample['orig_src_lang']}-{sample['orig_tgt_lang']}"
             batch_counts[lang_pair] += 1
-            total_tokens += max(estimate_tokens(src, args.max_length), estimate_tokens(tgt, args.max_length))
+            total_tokens += max(src_tok, tgt_tok)
             left.append(src)
             right.append(tgt)
-        with lang_pair_lock:
+        with stats_lock:
             lang_pair_counts.update(batch_counts)
+            skipped_too_long[0] += batch_skipped
         return left, right
 
     def print_lang_stats(top_n=10):
-        with lang_pair_lock:
+        with stats_lock:
             total = sum(lang_pair_counts.values())
             print(f"\nLanguage pair stats ({total} samples, {len(lang_pair_counts)} pairs):")
             for pair, count in lang_pair_counts.most_common(top_n):
@@ -500,6 +510,10 @@ def main():
     stop_prefetch.set()
     if val_thread is not None:
         val_thread.join()
+
+    # Print final stats
+    total_samples = sum(lang_pair_counts.values())
+    print(f"\nTraining complete: {total_samples} samples used, {skipped_too_long[0]} skipped (exceeded max_length)")
 
     # Save final model
     final_path = os.path.join(args.output_dir, "embedder.pt")
