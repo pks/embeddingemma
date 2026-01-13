@@ -435,18 +435,19 @@ def main():
 
         val_loss_result[0] = total_loss / len(val_batches)
 
-    # Language statistics
-    lang_counts = Counter()
-    lang_tokens = Counter()
+    # Statistics
+    lang_tokens = Counter()  # tokens per language
+    pair_examples = Counter()  # examples per language pair
     total_examples = [0]
+    total_tokens_seen = [0]
     skipped_too_long = [0]
     stats_lock = threading.Lock()
 
     def get_batch():
         left, right = [], []
         total_tokens = 0
-        batch_lang_counts = Counter()
         batch_lang_tokens = Counter()
+        batch_pair_examples = Counter()
         batch_skipped = 0
         batch_examples = 0
         while total_tokens < args.max_batch_tokens:
@@ -458,31 +459,35 @@ def main():
                 continue
             src_lang = normalize_lang(sample['orig_src_lang'])
             tgt_lang = normalize_lang(sample['orig_tgt_lang'])
-            batch_lang_counts[src_lang] += 1
-            batch_lang_counts[tgt_lang] += 1
             batch_lang_tokens[src_lang] += src_tok
             batch_lang_tokens[tgt_lang] += tgt_tok
+            batch_pair_examples[f"{src_lang}-{tgt_lang}"] += 1
             total_tokens += max(src_tok, tgt_tok)
             batch_examples += 1
             left.append(src)
             right.append(tgt)
         with stats_lock:
-            lang_counts.update(batch_lang_counts)
             lang_tokens.update(batch_lang_tokens)
+            pair_examples.update(batch_pair_examples)
             total_examples[0] += batch_examples
+            total_tokens_seen[0] += sum(batch_lang_tokens.values())
             skipped_too_long[0] += batch_skipped
         return left, right, total_tokens
 
-    def print_lang_stats(top_n=10):
+    def print_stats(top_n=10):
         with stats_lock:
-            total_toks = sum(lang_tokens.values())
-            total_sents = sum(lang_counts.values())
-            avg_tokens = total_toks / total_sents if total_sents > 0 else 0
-            print(f"Language stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):", flush=True)
-            for lang, sents in lang_counts.most_common(top_n):
-                toks = lang_tokens[lang]
-                lang_avg = toks / sents
-                print(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)", flush=True)
+            n_examples = total_examples[0]
+            n_langs = len(lang_tokens)
+            n_sents = n_examples * 2
+            n_toks = total_tokens_seen[0]
+            avg_tok = n_toks / n_sents if n_sents > 0 else 0
+            print(f"Stats ({n_examples:,} examples, {n_langs} langs, {n_sents:,} sents, {n_toks:,} toks, {avg_tok:.1f} avg tok/sent):", flush=True)
+            print("  Tokens per language:", flush=True)
+            for lang, toks in lang_tokens.most_common(top_n):
+                print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%)", flush=True)
+            print("  Examples per language pair:", flush=True)
+            for pair, count in pair_examples.most_common(top_n):
+                print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
@@ -571,7 +576,7 @@ def main():
             # Print checkpoint info
             pbar.clear()
             print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}", flush=True)
-            print_lang_stats()
+            print_stats()
             pbar.refresh()
 
             last_checkpoint_tokens = tokens_processed
