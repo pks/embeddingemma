@@ -20,7 +20,8 @@ def normalize_lang(code):
     except:
         return code
 
-# All English language pairs - both directions (430 total)
+
+# All language pairs including English (430 total)
 LANG_PAIRS = [
     # X-eng_Latn pairs (122)
     "abk_Cyrl-eng_Latn", "ace_Latn-eng_Latn", "acm_Arab-eng_Latn", "aeb_Arab-eng_Latn",
@@ -470,6 +471,7 @@ def main():
 
     # Statistics
     lang_tokens = Counter()  # tokens per language
+    lang_sents = Counter()  # sentences per language
     pair_examples = Counter()  # examples per language pair
     total_examples = [0]
     total_tokens_seen = [0]
@@ -489,6 +491,7 @@ def main():
         left, right = [], []
         total_tokens = 0
         batch_lang_tokens = Counter()
+        batch_lang_sents = Counter()
         batch_pair_examples = Counter()
         batch_skipped = 0
         batch_examples = 0
@@ -506,6 +509,8 @@ def main():
             tgt_lang = normalize_lang(sample['orig_tgt_lang'])
             batch_lang_tokens[src_lang] += src_tok
             batch_lang_tokens[tgt_lang] += tgt_tok
+            batch_lang_sents[src_lang] += 1
+            batch_lang_sents[tgt_lang] += 1
             batch_pair_examples[f"{src_lang}-{tgt_lang}"] += 1
             total_tokens += max(src_tok, tgt_tok)
             batch_examples += 1
@@ -513,6 +518,7 @@ def main():
             right.append(tgt)
         with stats_lock:
             lang_tokens.update(batch_lang_tokens)
+            lang_sents.update(batch_lang_sents)
             pair_examples.update(batch_pair_examples)
             total_examples[0] += batch_examples
             total_tokens_seen[0] += sum(batch_lang_tokens.values())
@@ -529,7 +535,9 @@ def main():
             print(f"Stats ({n_examples:,} examples, {n_langs} langs, {n_sents:,} sents, {n_toks:,} toks, {avg_tok:.1f} avg tok/sent):", flush=True)
             print("  Tokens per language:", flush=True)
             for lang, toks in lang_tokens.most_common(top_n):
-                print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%)", flush=True)
+                sents = lang_sents[lang]
+                avg = toks / sents if sents > 0 else 0
+                print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%, {avg:.1f} avg)", flush=True)
             print("  Examples per language pair:", flush=True)
             for pair, count in pair_examples.most_common(top_n):
                 print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
@@ -547,18 +555,28 @@ def main():
         """Update sampling weights based on validation loss (higher loss = higher weight)."""
         if not args.adaptive_sampling or not val_loss_by_pair:
             return
-        # Only update weights for pairs that are in both training and validation
+        # Update weights for pairs that are in both training and validation
+        validated_weights = []
         for val_pair, loss in val_loss_by_pair.items():
             if val_pair in sampling_weights:
                 # Weight proportional to loss (but clamp to avoid extremes)
-                sampling_weights[val_pair] = max(0.1, min(10.0, loss))
+                weight = max(0.1, min(10.0, loss))
+                sampling_weights[val_pair] = weight
+                validated_weights.append(weight)
+        # Set non-validated pairs to mean weight of validated pairs
+        mean_weight = sum(validated_weights) / len(validated_weights) if validated_weights else 1.0
+        for pair in sampling_weights:
+            if pair not in val_loss_by_pair:
+                sampling_weights[pair] = mean_weight
         # Print updated weights
-        print("  Updated sampling weights:", flush=True)
+        print(f"  Updated sampling weights (non-validated: {mean_weight:.2f}):", flush=True)
         total_w = sum(sampling_weights.values())
         for pair in sorted(sampling_weights.keys()):
             if pair in val_loss_by_pair:
+                src_lang, tgt_lang = pair.split("-")
+                short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
                 prob = sampling_weights[pair] / total_w * 100
-                print(f"    {pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
+                print(f"    {short_pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
