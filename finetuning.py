@@ -324,6 +324,8 @@ def parse_args():
                         help="Directory to save checkpoints")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Verbose output (show per-language and per-pair details)")
 
     return parser.parse_args()
 
@@ -382,18 +384,18 @@ def main():
 
     if args.num_langs is not None:
         selected_pairs = random.sample(base_pairs, min(args.num_langs, len(base_pairs)))
-        print(f"Sampled {len(selected_pairs)} from {set_name} set ({len(base_pairs)} pairs):")
-        for lp in selected_pairs:
-            print(f"  {lp}")
+        print(f"Sampled {len(selected_pairs)} from {set_name} set ({len(base_pairs)} pairs)")
+        if args.verbose:
+            for lp in selected_pairs:
+                print(f"  {lp}")
     else:
         selected_pairs = base_pairs
         print(f"Using {set_name} set: {len(selected_pairs)} language pairs")
 
     # Load training datasets
-    print("Loading training datasets...")
+    print(f"Loading {len(selected_pairs)} training datasets" + (" (adaptive)" if args.adaptive_sampling else "") + "...")
     if args.adaptive_sampling:
         # Keep individual iterators for weighted sampling
-        print("Adaptive sampling enabled - keeping per-pair iterators")
         pair_iterators = {}
         for lp in tqdm(selected_pairs, desc="Loading language pairs"):
             ds = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
@@ -415,10 +417,11 @@ def main():
     val_batch_tokens = args.val_batch_tokens if args.val_batch_tokens is not None else args.max_batch_tokens
     val_pairs = args.val_pairs
     per_pair_size = args.val_size // len(val_pairs)
-    print(f"Creating validation set from {len(val_pairs)} pairs ({args.val_size} total, {per_pair_size} each, {val_batch_tokens} tokens/batch)...")
+    print(f"Creating validation set: {len(val_pairs)} pairs, {args.val_size} total examples...")
 
     # Load and batch per language pair (for per-pair loss computation)
     val_batches_by_pair = {}
+    total_val_batches = 0
     for val_pair in val_pairs:
         val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=val_pair, split="train", streaming=True)
         val_iter = iter(val_dataset)
@@ -452,10 +455,12 @@ def main():
                 tokenize(batch_right, args.max_length, args.val_device)
             ))
         val_batches_by_pair[val_pair] = batches
-        # Normalize pair name for display
-        src_lang, tgt_lang = val_pair.split("-")
-        short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-        print(f"  {short_pair}: {len(val_left)} pairs, {len(batches)} batches")
+        total_val_batches += len(batches)
+        if args.verbose:
+            src_lang, tgt_lang = val_pair.split("-")
+            short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+            print(f"  {short_pair}: {len(val_left)} pairs, {len(batches)} batches")
+    print(f"Validation ready: {total_val_batches} batches across {len(val_pairs)} pairs")
 
     # Create training iterator (only for non-adaptive mode)
     if not args.adaptive_sampling:
@@ -551,31 +556,47 @@ def main():
             skipped_too_long[0] += batch_skipped
         return left, right, total_tokens
 
-    def print_stats(top_n=10):
+    def print_stats(top_n=5):
         with stats_lock:
             n_examples = total_examples[0]
             n_langs = len(lang_tokens)
-            n_sents = n_examples * 2
             n_toks = total_tokens_seen[0]
-            avg_tok = n_toks / n_sents if n_sents > 0 else 0
-            print(f"Stats ({n_examples:,} examples, {n_langs} langs, {n_sents:,} sents, {n_toks:,} toks, {avg_tok:.1f} avg tok/sent):", flush=True)
-            print("  Tokens per language:", flush=True)
-            for lang, toks in lang_tokens.most_common(top_n):
-                sents = lang_sents[lang]
-                avg = toks / sents if sents > 0 else 0
-                print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%, {avg:.1f} avg)", flush=True)
-            print("  Examples per language pair:", flush=True)
-            for pair, count in pair_examples.most_common(top_n):
-                print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
+            avg_tok = n_toks / (n_examples * 2) if n_examples > 0 else 0
+            print(f"Stats: {n_examples:,} examples, {n_langs} langs, {n_toks:,} toks, {avg_tok:.1f} avg tok/sent", flush=True)
+            if args.verbose:
+                # Verbose: full per-language stats
+                print("  Tokens per language:", flush=True)
+                for lang, toks in lang_tokens.most_common(top_n * 2):
+                    sents = lang_sents[lang]
+                    avg = toks / sents if sents > 0 else 0
+                    print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%, {avg:.1f} avg)", flush=True)
+                print("  Examples per language pair:", flush=True)
+                for pair, count in pair_examples.most_common(top_n * 2):
+                    print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
+            else:
+                # Compact: top languages on one line
+                top_langs = [f"{lang}:{toks//1000}k" for lang, toks in lang_tokens.most_common(top_n)]
+                print(f"  Top langs: {', '.join(top_langs)}", flush=True)
+            # Validation loss per pair
             if val_loss_by_pair:
-                print("  Validation loss per pair:", flush=True)
-                for val_pair, loss in val_loss_by_pair.items():
-                    src_lang, tgt_lang = val_pair.split("-")
-                    short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-                    weight_str = ""
-                    if args.adaptive_sampling and val_pair in sampling_weights:
-                        weight_str = f" (weight: {sampling_weights[val_pair]:.2f})"
-                    print(f"    {short_pair}: {loss:.4f}{weight_str}", flush=True)
+                if args.verbose:
+                    print("  Validation loss per pair:", flush=True)
+                    for val_pair, loss in val_loss_by_pair.items():
+                        src_lang, tgt_lang = val_pair.split("-")
+                        short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+                        weight_str = ""
+                        if args.adaptive_sampling and val_pair in sampling_weights:
+                            weight_str = f" (weight: {sampling_weights[val_pair]:.2f})"
+                        print(f"    {short_pair}: {loss:.4f}{weight_str}", flush=True)
+                else:
+                    # Compact: multiple per line
+                    loss_items = []
+                    for val_pair, loss in val_loss_by_pair.items():
+                        src_lang, tgt_lang = val_pair.split("-")
+                        short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+                        loss_items.append(f"{short_pair}:{loss:.3f}")
+                    for i in range(0, len(loss_items), 5):
+                        print(f"  Val: {', '.join(loss_items[i:i+5])}", flush=True)
 
     def update_sampling_weights():
         """Update sampling weights based on validation loss (higher loss = higher weight)."""
@@ -585,7 +606,6 @@ def main():
         validated_weights = []
         for val_pair, loss in val_loss_by_pair.items():
             if val_pair in sampling_weights:
-                # Weight proportional to loss (but clamp to avoid extremes)
                 weight = max(0.1, min(10.0, loss))
                 sampling_weights[val_pair] = weight
                 validated_weights.append(weight)
@@ -594,15 +614,17 @@ def main():
         for pair in sampling_weights:
             if pair not in val_loss_by_pair:
                 sampling_weights[pair] = mean_weight
-        # Print updated weights
-        print(f"  Updated sampling weights (non-validated: {mean_weight:.2f}):", flush=True)
-        total_w = sum(sampling_weights.values())
-        for pair in sorted(sampling_weights.keys()):
-            if pair in val_loss_by_pair:
-                src_lang, tgt_lang = pair.split("-")
-                short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-                prob = sampling_weights[pair] / total_w * 100
-                print(f"    {short_pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
+        if args.verbose:
+            print(f"  Updated sampling weights (non-validated: {mean_weight:.2f}):", flush=True)
+            total_w = sum(sampling_weights.values())
+            for pair in sorted(sampling_weights.keys()):
+                if pair in val_loss_by_pair:
+                    src_lang, tgt_lang = pair.split("-")
+                    short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+                    prob = sampling_weights[pair] / total_w * 100
+                    print(f"    {short_pair}: {sampling_weights[pair]:.2f} ({prob:.1f}%)", flush=True)
+        else:
+            print(f"  Adaptive weights updated (base: {mean_weight:.2f})", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
