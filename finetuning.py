@@ -225,6 +225,15 @@ def estimate_tokens(text):
     return len(text) // 4 + 1
 
 
+def parse_num(s):
+    """Parse human-readable numbers like 1B, 500M, 100K."""
+    s = s.strip().upper()
+    multipliers = {'K': 1_000, 'M': 1_000_000, 'B': 1_000_000_000}
+    if s[-1] in multipliers:
+        return int(float(s[:-1]) * multipliers[s[-1]])
+    return int(s)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune multilingual embeddings")
 
@@ -245,14 +254,18 @@ def parse_args():
     # Training
     parser.add_argument("--lr", type=float, default=2e-4,
                         help="Learning rate")
-    parser.add_argument("--steps", type=int, default=1000,
-                        help="Number of training steps")
+    parser.add_argument("--steps", type=int, default=None,
+                        help="Number of training steps (overrides --total-tokens)")
+    parser.add_argument("--total-tokens", type=parse_num, default="1M",
+                        help="Total tokens to train on (e.g. 1M, 500K, 1B)")
     parser.add_argument("--max-batch-tokens", type=int, default=1024,
                         help="Max tokens per batch")
     parser.add_argument("--max-length", type=int, default=128,
                         help="Max sequence length")
-    parser.add_argument("--checkpoint-interval", type=int, default=100,
-                        help="Save checkpoint every N steps")
+    parser.add_argument("--checkpoint-steps", type=int, default=100,
+                        help="Save checkpoint every N steps (when using --steps)")
+    parser.add_argument("--checkpoint-tokens", type=parse_num, default="100K",
+                        help="Save checkpoint every N tokens (e.g. 100K, 1M)")
 
     # Data
     parser.add_argument("--lang-set", type=str, default="all", choices=["all", "curated"],
@@ -438,7 +451,7 @@ def main():
         with stats_lock:
             lang_pair_counts.update(batch_counts)
             skipped_too_long[0] += batch_skipped
-        return left, right
+        return left, right, total_tokens
 
     def print_lang_stats(top_n=10):
         with stats_lock:
@@ -455,10 +468,10 @@ def main():
     def prefetch_worker():
         while not stop_prefetch.is_set():
             try:
-                left, right = get_batch()
+                left, right, batch_tokens = get_batch()
                 batch_l = tokenize(left, args.max_length, args.train_device)
                 batch_r = tokenize(right, args.max_length, args.train_device)
-                batch_queue.put((batch_l, batch_r))
+                batch_queue.put((batch_l, batch_r, batch_tokens))
             except StopIteration:
                 break
 
@@ -466,9 +479,28 @@ def main():
     prefetch_thread.start()
 
     # Training loop
-    pbar = tqdm(range(args.steps), desc="Training")
-    for step in pbar:
-        batch_l, batch_r = batch_queue.get()
+    tokens_processed = 0
+    last_checkpoint_tokens = 0
+    step = 0
+    use_steps = args.steps is not None
+
+    if use_steps:
+        pbar = tqdm(total=args.steps, desc="Training", unit="step")
+    else:
+        pbar = tqdm(total=args.total_tokens, desc="Training", unit="tok")
+
+    def should_continue():
+        if use_steps:
+            return step < args.steps
+        return tokens_processed < args.total_tokens
+
+    def should_checkpoint():
+        if use_steps:
+            return step > 0 and step % args.checkpoint_steps == 0
+        return tokens_processed - last_checkpoint_tokens >= args.checkpoint_tokens
+
+    while should_continue():
+        batch_l, batch_r, batch_tokens = batch_queue.get()
 
         a = embedder(**batch_l)
         b = embedder(**batch_r)
@@ -479,13 +511,18 @@ def main():
         loss.backward()
         opt.step()
 
+        tokens_processed += batch_tokens
+        step += 1
+        pbar.update(1 if use_steps else batch_tokens)
+
         # Update progress bar
         pbar.set_postfix(
             train=f"{loss.detach().item():.4f}",
             val=f"{val_loss_result[0]:.4f}" if val_loss_result[0] else "..."
         )
 
-        if step % args.checkpoint_interval == 0:
+        is_first = (step == 1) if use_steps else (last_checkpoint_tokens == 0)
+        if is_first or should_checkpoint():
             # Wait for previous validation
             if val_thread is not None:
                 val_thread.join()
@@ -494,17 +531,21 @@ def main():
             val_thread = threading.Thread(target=run_validation)
             val_thread.start()
 
-            # For step 0, wait for result
-            if step == 0:
+            # For first checkpoint, wait for result
+            if is_first:
                 val_thread.join()
                 pbar.set_postfix(train=f"{loss.detach().item():.4f}", val=f"{val_loss_result[0]:.4f}")
 
             # Save checkpoint
-            ckpt_path = os.path.join(args.output_dir, f"embedder_step{step}.pt")
+            ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
             torch.save(embedder.state_dict(), ckpt_path)
 
             # Print language stats
             print_lang_stats()
+
+            last_checkpoint_tokens = tokens_processed
+
+    pbar.close()
 
     # Cleanup
     stop_prefetch.set()
@@ -513,7 +554,7 @@ def main():
 
     # Print final stats
     total_samples = sum(lang_pair_counts.values())
-    print(f"\nTraining complete: {total_samples} samples used, {skipped_too_long[0]} skipped (exceeded max_length)")
+    print(f"\nTraining complete: {step:,} steps, {tokens_processed:,} tokens, {total_samples:,} samples, {skipped_too_long[0]:,} skipped (exceeded max_length)")
 
     # Save final model
     final_path = os.path.join(args.output_dir, "embedder.pt")
