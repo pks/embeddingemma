@@ -426,16 +426,20 @@ def main():
 
         val_loss_result[0] = total_loss / len(val_batches)
 
-    # Language pair statistics
-    lang_pair_counts = Counter()
+    # Language statistics
+    lang_counts = Counter()
+    lang_tokens = Counter()
+    total_examples = [0]
     skipped_too_long = [0]
     stats_lock = threading.Lock()
 
     def get_batch():
         left, right = [], []
         total_tokens = 0
-        batch_counts = Counter()
+        batch_lang_counts = Counter()
+        batch_lang_tokens = Counter()
         batch_skipped = 0
+        batch_examples = 0
         while total_tokens < args.max_batch_tokens:
             sample = next(data_iter)
             src, tgt = sample["source_text"], sample["target_text"]
@@ -443,22 +447,31 @@ def main():
             if src_tok > args.max_length or tgt_tok > args.max_length:
                 batch_skipped += 1
                 continue
-            lang_pair = f"{sample['orig_src_lang']}-{sample['orig_tgt_lang']}"
-            batch_counts[lang_pair] += 1
+            src_lang, tgt_lang = sample['orig_src_lang'], sample['orig_tgt_lang']
+            batch_lang_counts[src_lang] += 1
+            batch_lang_counts[tgt_lang] += 1
+            batch_lang_tokens[src_lang] += src_tok
+            batch_lang_tokens[tgt_lang] += tgt_tok
             total_tokens += max(src_tok, tgt_tok)
+            batch_examples += 1
             left.append(src)
             right.append(tgt)
         with stats_lock:
-            lang_pair_counts.update(batch_counts)
+            lang_counts.update(batch_lang_counts)
+            lang_tokens.update(batch_lang_tokens)
+            total_examples[0] += batch_examples
             skipped_too_long[0] += batch_skipped
         return left, right, total_tokens
 
     def print_lang_stats(top_n=10):
         with stats_lock:
-            total = sum(lang_pair_counts.values())
-            print(f"\nLanguage pair stats ({total} samples, {len(lang_pair_counts)} pairs):")
-            for pair, count in lang_pair_counts.most_common(top_n):
-                print(f"  {pair}: {count} ({100*count/total:.1f}%)")
+            total_toks = sum(lang_tokens.values())
+            total_count = sum(lang_counts.values())
+            avg_tokens = total_toks / total_count if total_count > 0 else 0
+            print(f"\nLanguage stats ({total_examples[0]} examples, {len(lang_counts)} langs, {avg_tokens:.1f} avg tok):")
+            for lang, count in lang_counts.most_common(top_n):
+                lang_avg = lang_tokens[lang] / count
+                print(f"  {lang}: {count} ({100*count/total_count:.1f}%, {lang_avg:.1f} avg tok)")
             print()
 
     # Prefetch batches in background
@@ -553,8 +566,7 @@ def main():
         val_thread.join()
 
     # Print final stats
-    total_samples = sum(lang_pair_counts.values())
-    print(f"\nTraining complete: {step:,} steps, {tokens_processed:,} tokens, {total_samples:,} samples, {skipped_too_long[0]:,} skipped (exceeded max_length)")
+    print(f"\nTraining complete: {step:,} steps, {tokens_processed:,} tokens, {total_examples[0]:,} examples, {skipped_too_long[0]:,} skipped (exceeded max_length)")
 
     # Save final model
     final_path = os.path.join(args.output_dir, "embedder.pt")
