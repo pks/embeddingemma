@@ -466,12 +466,13 @@ def main():
     def print_lang_stats(top_n=10):
         with stats_lock:
             total_toks = sum(lang_tokens.values())
-            total_count = sum(lang_counts.values())
-            avg_tokens = total_toks / total_count if total_count > 0 else 0
-            print(f"\nLanguage stats ({total_examples[0]} examples, {len(lang_counts)} langs, {avg_tokens:.1f} avg tok):")
-            for lang, count in lang_counts.most_common(top_n):
-                lang_avg = lang_tokens[lang] / count
-                print(f"  {lang}: {count} ({100*count/total_count:.1f}%, {lang_avg:.1f} avg tok)")
+            total_sents = sum(lang_counts.values())
+            avg_tokens = total_toks / total_sents if total_sents > 0 else 0
+            print(f"\nLanguage stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):")
+            for lang, sents in lang_counts.most_common(top_n):
+                toks = lang_tokens[lang]
+                lang_avg = toks / sents
+                print(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)")
             print()
 
     # Prefetch batches in background
