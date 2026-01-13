@@ -274,17 +274,17 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune multilingual embeddings")
 
     # Model
-    parser.add_argument("--model", type=str, default="MaLA-LM/emma-500-llama2-7b",
+    parser.add_argument("--model", type=str, default="MaLA-LM/emma-500-llama3-8b-bi",
                         help="Base model ID")
     parser.add_argument("--out-dim", type=int, default=768,
                         help="Output embedding dimension")
-    parser.add_argument("--layer", type=int, default=-4,
+    parser.add_argument("--layer", type=int, default=-1,
                         help="Hidden layer to extract embeddings from")
 
     # Devices
     parser.add_argument("--train-device", type=str, default="cuda:0",
                         help="Device for training")
-    parser.add_argument("--val-device", type=str, default="cuda:1",
+    parser.add_argument("--val-device", type=str, default="cuda:0",
                         help="Device for validation (set same as train-device for single GPU)")
 
     # Training
@@ -292,27 +292,27 @@ def parse_args():
                         help="Learning rate")
     parser.add_argument("--steps", type=int, default=None,
                         help="Number of training steps (overrides --total-tokens)")
-    parser.add_argument("--total-tokens", type=parse_num, default="1M",
+    parser.add_argument("--total-tokens", type=parse_num, default="10M",
                         help="Total tokens to train on (e.g. 1M, 500K, 1B)")
-    parser.add_argument("--max-batch-tokens", type=int, default=1024,
+    parser.add_argument("--max-batch-tokens", type=int, default=3072,
                         help="Max tokens per batch")
-    parser.add_argument("--max-length", type=int, default=128,
+    parser.add_argument("--max-length", type=int, default=512,
                         help="Max sequence length")
     parser.add_argument("--checkpoint-steps", type=int, default=100,
                         help="Save checkpoint every N steps (when using --steps)")
-    parser.add_argument("--checkpoint-tokens", type=parse_num, default="100K",
+    parser.add_argument("--checkpoint-tokens", type=parse_num, default="1M",
                         help="Save checkpoint every N tokens (e.g. 100K, 1M)")
 
     # Data
-    parser.add_argument("--lang-set", type=str, default="all", choices=["all", "curated"],
+    parser.add_argument("--lang-set", type=str, default="curated", choices=["all", "curated"],
                         help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
-    parser.add_argument("--num-langs", type=int, default=None,
+    parser.add_argument("--num-langs", type=int, default=69,
                         help="Sample N language pairs from the set (default: use all in set)")
     parser.add_argument("--val-pairs", type=str, nargs="+", default=VALIDATION_PAIRS,
                         help="Language pairs for validation (budget shared between them)")
-    parser.add_argument("--val-size", type=int, default=128,
+    parser.add_argument("--val-size", type=int, default=1000,
                         help="Total number of validation sentence pairs (shared across all val-pairs)")
-    parser.add_argument("--val-batch-tokens", type=int, default=None,
+    parser.add_argument("--val-batch-tokens", type=int, default=512,
                         help="Max tokens per validation batch (default: same as --max-batch-tokens)")
     parser.add_argument("--shuffle-buffer", type=int, default=1000,
                         help="Shuffle buffer size (lower = faster startup)")

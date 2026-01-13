@@ -65,11 +65,11 @@ def parse_args():
                         help="Path to embedder checkpoint (.pt file)")
 
     # Model
-    parser.add_argument("--model", type=str, default="MaLA-LM/emma-500-llama2-7b",
+    parser.add_argument("--model", type=str, default="MaLA-LM/emma-500-llama3-8b-bi",
                         help="Base model ID")
     parser.add_argument("--out-dim", type=int, default=768,
                         help="Output embedding dimension")
-    parser.add_argument("--layer", type=int, default=-4,
+    parser.add_argument("--layer", type=int, default=-1,
                         help="Hidden layer to extract embeddings from")
 
     # Inference
