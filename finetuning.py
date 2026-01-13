@@ -10,6 +10,15 @@ from collections import Counter
 import argparse
 import random
 import os
+import langcodes
+
+
+def normalize_lang(code):
+    """Normalize language code to base language (e.g. pt_BR -> pt)."""
+    try:
+        return langcodes.Language.get(code).language
+    except:
+        return code
 
 # All English language pairs - both directions (430 total)
 LANG_PAIRS = [
@@ -447,7 +456,8 @@ def main():
             if src_tok > args.max_length or tgt_tok > args.max_length:
                 batch_skipped += 1
                 continue
-            src_lang, tgt_lang = sample['orig_src_lang'], sample['orig_tgt_lang']
+            src_lang = normalize_lang(sample['orig_src_lang'])
+            tgt_lang = normalize_lang(sample['orig_tgt_lang'])
             batch_lang_counts[src_lang] += 1
             batch_lang_counts[tgt_lang] += 1
             batch_lang_tokens[src_lang] += src_tok
@@ -468,11 +478,11 @@ def main():
             total_toks = sum(lang_tokens.values())
             total_sents = sum(lang_counts.values())
             avg_tokens = total_toks / total_sents if total_sents > 0 else 0
-            tqdm.write(f"Language stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):")
+            print(f"Language stats ({total_examples[0]:,} examples, {len(lang_counts)} langs, {total_sents:,} sents, {total_toks:,} toks, {avg_tokens:.1f} avg tok/sent):", flush=True)
             for lang, sents in lang_counts.most_common(top_n):
                 toks = lang_tokens[lang]
                 lang_avg = toks / sents
-                tqdm.write(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)")
+                print(f"  {lang}: {sents:,} sents, {toks:,} toks ({lang_avg:.1f} avg)", flush=True)
 
     # Prefetch batches in background
     batch_queue = Queue(maxsize=4)
@@ -559,8 +569,10 @@ def main():
             torch.save(embedder.state_dict(), ckpt_path)
 
             # Print checkpoint info
-            tqdm.write(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}")
+            pbar.clear()
+            print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}", flush=True)
             print_lang_stats()
+            pbar.refresh()
 
             last_checkpoint_tokens = tokens_processed
 
