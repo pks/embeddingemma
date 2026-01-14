@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Fine-tune multilingual embeddings using contrastive learning."""
 
+import os
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset, interleave_datasets
+from datasets import load_dataset, interleave_datasets, disable_progress_bars as disable_datasets_progress
+from transformers import logging as hf_logging
 import threading
 from tqdm import tqdm
 from queue import Queue
 from collections import Counter
 import argparse
 import random
-import os
 import langcodes
 
 from common import Embedder, load_tokenizer, load_base_model, POOLING_MODES
@@ -326,6 +327,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Disable progress bars if requested
+    if args.no_progress:
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        hf_logging.set_verbosity_error()
+        disable_datasets_progress()
 
     # Print settings
     print("=" * 60)
