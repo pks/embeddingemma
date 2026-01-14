@@ -35,6 +35,8 @@ def parse_args():
                         help="Pooling strategy: mean, last, or attention")
     parser.add_argument("--mlp-head", action="store_true",
                         help="Use MLP projection head (must match training)")
+    parser.add_argument("--mlp-hidden", type=int, default=None,
+                        help="Hidden dimension for MLP head (must match training)")
 
     # Inference
     parser.add_argument("--device", type=str, default="cuda",
@@ -67,7 +69,8 @@ if __name__ == "__main__":
             layer=args.layer,
             device=args.device,
             pooling=args.pooling,
-            mlp_head=args.mlp_head
+            mlp_head=args.mlp_head,
+            mlp_hidden=args.mlp_hidden
         )
 
         embeddings = embed(embedder, texts, tokenizer, max_length=args.max_length, device=args.device)

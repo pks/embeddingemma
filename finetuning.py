@@ -264,6 +264,8 @@ def parse_args():
                         help="Pooling strategy: mean, last, or attention")
     parser.add_argument("--mlp-head", action="store_true",
                         help="Use MLP projection head (Linear->ReLU->Linear) instead of single Linear")
+    parser.add_argument("--mlp-hidden", type=int, default=None,
+                        help="Hidden dimension for MLP head (default: same as base model hidden size)")
 
     # Devices
     parser.add_argument("--train-device", type=str, default="cuda:0",
@@ -348,10 +350,10 @@ def main():
 
     # Create embedder(s)
     embedder = Embedder(base, out_dim=args.out_dim, layer=args.layer, pooling=args.pooling,
-                        mlp_head=args.mlp_head).to(dtype=torch.bfloat16, device=args.train_device).train()
+                        mlp_head=args.mlp_head, mlp_hidden=args.mlp_hidden).to(dtype=torch.bfloat16, device=args.train_device).train()
     if args.val_device != args.train_device:
         val_embedder = Embedder(val_base, out_dim=args.out_dim, layer=args.layer, pooling=args.pooling,
-                                mlp_head=args.mlp_head).to(dtype=torch.bfloat16, device=args.val_device).eval()
+                                mlp_head=args.mlp_head, mlp_hidden=args.mlp_hidden).to(dtype=torch.bfloat16, device=args.val_device).eval()
     else:
         val_embedder = None  # Use embedder for validation when on same device
 

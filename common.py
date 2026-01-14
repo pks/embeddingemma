@@ -17,7 +17,7 @@ POOLING_MODES = ["mean", "last", "attention"]
 
 
 class Embedder(nn.Module):
-    def __init__(self, base_model, out_dim=768, layer=-1, pooling="mean", mlp_head=False):
+    def __init__(self, base_model, out_dim=768, layer=-1, pooling="mean", mlp_head=False, mlp_hidden=None):
         super().__init__()
         self.base = base_model
         self.layer = layer
@@ -31,10 +31,11 @@ class Embedder(nn.Module):
 
         # Projection head
         if mlp_head:
+            mlp_dim = mlp_hidden if mlp_hidden is not None else hidden
             self.proj = nn.Sequential(
-                nn.Linear(hidden, hidden, bias=False),
+                nn.Linear(hidden, mlp_dim, bias=False),
                 nn.ReLU(),
-                nn.Linear(hidden, out_dim, bias=False),
+                nn.Linear(mlp_dim, out_dim, bias=False),
             )
         else:
             self.proj = nn.Linear(hidden, out_dim, bias=False)
@@ -86,11 +87,11 @@ def load_base_model(model_id, device="cuda"):
 
 
 def load_embedder(checkpoint_path, model_id, out_dim=768, layer=-1, device="cuda",
-                  pooling="mean", mlp_head=False):
+                  pooling="mean", mlp_head=False, mlp_hidden=None):
     """Load embedder with trained projection weights."""
     base = load_base_model(model_id, device)
     embedder = Embedder(base, out_dim=out_dim, layer=layer, pooling=pooling,
-                        mlp_head=mlp_head).to(dtype=torch.bfloat16, device=device)
+                        mlp_head=mlp_head, mlp_hidden=mlp_hidden).to(dtype=torch.bfloat16, device=device)
     embedder.proj.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
     # Load attention query if present
     if pooling == "attention":
