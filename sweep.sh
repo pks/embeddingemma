@@ -52,7 +52,7 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                     echo "Running: train=$train_name pooling=$pooling mlp=$mlp layer=$layer temp=$temp"
                     echo "========================================"
 
-                    ./finetuning.py \
+                    ./train.py \
                         --layer "$layer" \
                         --temperature "$temp" \
                         --pooling "$pooling" \
