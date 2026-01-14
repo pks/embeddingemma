@@ -393,6 +393,7 @@ def main():
     # Load and batch per language pair (for per-pair loss computation)
     val_batches_by_pair = {}
     total_val_batches = 0
+    val_pair_info = []  # Collect for sorted output
     for val_pair in val_pairs:
         val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=val_pair, split="train", streaming=True)
         val_iter = iter(val_dataset)
@@ -427,10 +428,13 @@ def main():
             ))
         val_batches_by_pair[val_pair] = batches
         total_val_batches += len(batches)
-        if args.verbose:
-            src_lang, tgt_lang = val_pair.split("-")
-            short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
-            print(f"  {short_pair}: {len(val_left)} pairs, {len(batches)} batches")
+        src_lang, tgt_lang = val_pair.split("-")
+        short_pair = f"{normalize_lang(src_lang)}-{normalize_lang(tgt_lang)}"
+        val_pair_info.append((short_pair, len(val_left), len(batches)))
+    # Print sorted verbose output
+    if args.verbose:
+        for short_pair, n_pairs, n_batches in sorted(val_pair_info):
+            print(f"  {short_pair}: {n_pairs} pairs, {n_batches} batches")
     print(f"Validation ready: {total_val_batches} batches across {len(val_pairs)} pairs")
 
     # Create training iterator (only for non-adaptive mode)
