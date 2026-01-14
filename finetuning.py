@@ -290,6 +290,8 @@ def parse_args():
     # Training
     parser.add_argument("--lr", type=float, default=2e-4,
                         help="Learning rate")
+    parser.add_argument("--temperature", type=float, default=0.05,
+                        help="Temperature for contrastive loss (lower = sharper)")
     parser.add_argument("--steps", type=int, default=None,
                         help="Number of training steps (overrides --total-tokens)")
     parser.add_argument("--total-tokens", type=parse_num, default="10M",
@@ -490,7 +492,7 @@ def main():
                 for val_batch_l, val_batch_r in batches:
                     val_a = model(**val_batch_l)
                     val_b = model(**val_batch_r)
-                    pair_loss += contrastive_loss(val_a, val_b).item()
+                    pair_loss += contrastive_loss(val_a, val_b, args.temperature).item()
                 val_loss_by_pair[val_pair] = pair_loss / len(batches) if batches else 0.0
                 total_loss += pair_loss
                 total_batches += len(batches)
@@ -682,7 +684,7 @@ def main():
         a = embedder(**batch_l)
         b = embedder(**batch_r)
 
-        loss = contrastive_loss(a, b)
+        loss = contrastive_loss(a, b, args.temperature)
 
         opt.zero_grad()
         loss.backward()
