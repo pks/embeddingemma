@@ -38,7 +38,7 @@ def load_embedder(checkpoint_path, model_id="MaLA-LM/emma-500-llama2-7b",
         p.requires_grad = False
 
     embedder = Embedder(base, out_dim=out_dim, layer=layer).to(dtype=torch.bfloat16, device=device)
-    embedder.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    embedder.proj.load_state_dict(torch.load(checkpoint_path, map_location=device))
     embedder.eval()
     return embedder
 

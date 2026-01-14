@@ -716,7 +716,7 @@ def main():
 
             # Save checkpoint
             ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
-            torch.save(embedder.state_dict(), ckpt_path)
+            torch.save(embedder.proj.state_dict(), ckpt_path)
 
             # Print checkpoint info
             pbar.clear()
@@ -740,7 +740,7 @@ def main():
 
     # Save final model
     final_path = os.path.join(args.output_dir, "embedder.pt")
-    torch.save(embedder.state_dict(), final_path)
+    torch.save(embedder.proj.state_dict(), final_path)
     print(f"Model saved to {final_path}")
 
 
