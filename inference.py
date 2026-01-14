@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run inference with trained embedder."""
+"""Run inference with trained embedder or sentence-transformer baseline."""
 
 import argparse
 import torch
@@ -16,15 +16,17 @@ def embed(embedder, texts, tokenizer, max_length=512, device="cuda"):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run inference with trained embedder")
+    parser = argparse.ArgumentParser(description="Run inference with trained embedder or baseline")
 
-    # Required
-    parser.add_argument("checkpoint", type=str,
-                        help="Path to embedder checkpoint (.pt file)")
+    # Checkpoint (optional - if not provided, uses sentence-transformer baseline)
+    parser.add_argument("checkpoint", type=str, nargs="?", default=None,
+                        help="Path to embedder checkpoint (.pt file). If not provided, uses --baseline model.")
 
     # Model
     parser.add_argument("--model", type=str, default="MaLA-LM/emma-500-llama3-8b-bi",
-                        help="Base model ID")
+                        help="Base model ID (for checkpoint mode)")
+    parser.add_argument("--baseline", type=str, default="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+                        help="Sentence-transformer model (when no checkpoint provided)")
     parser.add_argument("--out-dim", type=int, default=768,
                         help="Output embedding dimension")
     parser.add_argument("--layer", type=int, default=-1,
@@ -46,20 +48,30 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    print(f"Loading tokenizer from {args.model}...")
-    tokenizer = load_tokenizer(args.model)
-
-    print(f"Loading embedder from {args.checkpoint}...")
-    embedder = load_embedder(
-        args.checkpoint,
-        model_id=args.model,
-        out_dim=args.out_dim,
-        layer=args.layer,
-        device=args.device
-    )
-
-    # Use provided texts or example
     texts = args.texts if args.texts else EXAMPLE_TEXTS
 
-    embeddings = embed(embedder, texts, tokenizer, max_length=args.max_length, device=args.device)
+    if args.checkpoint:
+        # Use trained embedder
+        print(f"Loading tokenizer from {args.model}...")
+        tokenizer = load_tokenizer(args.model)
+
+        print(f"Loading embedder from {args.checkpoint}...")
+        embedder = load_embedder(
+            args.checkpoint,
+            model_id=args.model,
+            out_dim=args.out_dim,
+            layer=args.layer,
+            device=args.device
+        )
+
+        embeddings = embed(embedder, texts, tokenizer, max_length=args.max_length, device=args.device)
+    else:
+        # Use sentence-transformer baseline
+        from sentence_transformers import SentenceTransformer
+
+        print(f"Loading baseline model {args.baseline}...")
+        model = SentenceTransformer(args.baseline, device=args.device)
+
+        embeddings = model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
+
     print_similarity_results(embeddings, texts)
