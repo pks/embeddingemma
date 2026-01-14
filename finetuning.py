@@ -290,12 +290,16 @@ def parse_args():
                         help="Save checkpoint every N steps (when using --steps)")
     parser.add_argument("--checkpoint-tokens", type=parse_num, default="1M",
                         help="Save checkpoint every N tokens (e.g. 100K, 1M)")
+    parser.add_argument("--val-count", type=int, default=2,
+                        help="Number of validations during training (evenly spaced + final)")
 
     # Data
     parser.add_argument("--lang-set", type=str, default="curated", choices=["all", "curated"],
                         help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
     parser.add_argument("--num-langs", type=int, default=69,
                         help="Sample N language pairs from the set (default: use all in set)")
+    parser.add_argument("--train-pairs", type=str, nargs="+", default=None,
+                        help="Explicit language pairs for training (overrides --lang-set and --num-langs)")
     parser.add_argument("--val-pairs", type=str, nargs="+", default=VALIDATION_PAIRS,
                         help="Language pairs for validation (budget shared between them)")
     parser.add_argument("--val-size", type=int, default=1000,
@@ -337,8 +341,12 @@ def main():
         print(f"  Total tokens: {args.total_tokens:,}")
     print(f"  Batch tokens: {args.max_batch_tokens}")
     print(f"  Max length:   {args.max_length}")
-    print(f"  Lang set:     {args.lang_set} ({args.num_langs} pairs)")
+    if args.train_pairs:
+        print(f"  Train pairs:  {len(args.train_pairs)} explicit pairs")
+    else:
+        print(f"  Lang set:     {args.lang_set} ({args.num_langs} pairs)")
     print(f"  Val pairs:    {len(args.val_pairs)} pairs, {args.val_size} examples")
+    print(f"  Val count:    {args.val_count}")
     print(f"  Adaptive:     {args.adaptive_sampling}")
     print(f"  Devices:      train={args.train_device}, val={args.val_device}")
     print(f"  Output:       {args.output_dir}")
@@ -385,18 +393,26 @@ def main():
     opt = torch.optim.AdamW(embedder.parameters(), lr=args.lr)
 
     # Select language pairs
-    base_pairs = CURATED_LANG_PAIRS if args.lang_set == "curated" else LANG_PAIRS
-    set_name = "curated" if args.lang_set == "curated" else "all"
-
-    if args.num_langs is not None:
-        selected_pairs = random.sample(base_pairs, min(args.num_langs, len(base_pairs)))
-        print(f"Sampled {len(selected_pairs)} from {set_name} set ({len(base_pairs)} pairs)")
+    if args.train_pairs:
+        # Explicit training pairs override lang-set and num-langs
+        selected_pairs = args.train_pairs
+        print(f"Using {len(selected_pairs)} explicit training pairs")
         if args.verbose:
             for lp in selected_pairs:
                 print(f"  {lp}")
     else:
-        selected_pairs = base_pairs
-        print(f"Using {set_name} set: {len(selected_pairs)} language pairs")
+        base_pairs = CURATED_LANG_PAIRS if args.lang_set == "curated" else LANG_PAIRS
+        set_name = "curated" if args.lang_set == "curated" else "all"
+
+        if args.num_langs is not None:
+            selected_pairs = random.sample(base_pairs, min(args.num_langs, len(base_pairs)))
+            print(f"Sampled {len(selected_pairs)} from {set_name} set ({len(base_pairs)} pairs)")
+            if args.verbose:
+                for lp in selected_pairs:
+                    print(f"  {lp}")
+        else:
+            selected_pairs = base_pairs
+            print(f"Using {set_name} set: {len(selected_pairs)} language pairs")
 
     # Load training datasets
     print(f"Loading {len(selected_pairs)} training datasets" + (" (adaptive)" if args.adaptive_sampling else "") + "...")
@@ -667,9 +683,13 @@ def main():
 
     # Training loop
     tokens_processed = 0
-    last_checkpoint_tokens = 0
     step = 0
+    val_idx = 0  # Next validation index
     use_steps = args.steps is not None
+
+    # Calculate validation points (evenly spaced)
+    total_budget = args.steps if use_steps else args.total_tokens
+    val_points = [total_budget * (i + 1) // args.val_count for i in range(args.val_count)]
 
     if use_steps:
         pbar = tqdm(total=args.steps, desc="Training", unit="step")
@@ -681,10 +701,15 @@ def main():
             return step < args.steps
         return tokens_processed < args.total_tokens
 
-    def should_checkpoint():
-        if use_steps:
-            return step > 0 and step % args.checkpoint_steps == 0
-        return tokens_processed - last_checkpoint_tokens >= args.checkpoint_tokens
+    def should_validate():
+        nonlocal val_idx
+        if val_idx >= len(val_points):
+            return False
+        progress = step if use_steps else tokens_processed
+        if progress >= val_points[val_idx]:
+            val_idx += 1
+            return True
+        return False
 
     while should_continue():
         batch_l, batch_r, batch_tokens = batch_queue.get()
@@ -708,8 +733,7 @@ def main():
             val=f"{val_loss_result[0]:.4f}" if val_loss_result[0] else "..."
         )
 
-        is_first = (step == 1) if use_steps else (last_checkpoint_tokens == 0)
-        if is_first or should_checkpoint():
+        if should_validate():
             # Wait for previous validation
             if val_thread is not None:
                 val_thread.join()
@@ -735,8 +759,6 @@ def main():
             print_stats()
             update_sampling_weights()
             pbar.refresh()
-
-            last_checkpoint_tokens = tokens_processed
 
     pbar.close()
 

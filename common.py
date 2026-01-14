@@ -13,7 +13,7 @@ EXAMPLE_TEXTS = [
     "I like apples.",
 ]
 
-POOLING_MODES = ["mean", "last", "attention"]
+POOLING_MODES = ["mean", "last", "attention", "max"]
 
 
 class Embedder(nn.Module):
@@ -63,6 +63,11 @@ class Embedder(nn.Module):
             scores = scores.masked_fill(attention_mask == 0, float('-inf'))
             weights = F.softmax(scores, dim=1).unsqueeze(-1)  # (batch, seq, 1)
             pooled = (h * weights).sum(1)  # (batch, hidden)
+        elif self.pooling == "max":
+            # Max pooling (mask padded positions with -inf)
+            mask = attention_mask.unsqueeze(-1)
+            h_masked = h.masked_fill(mask == 0, float('-inf'))
+            pooled = h_masked.max(dim=1).values  # (batch, hidden)
 
         z = self.proj(pooled)
         z = F.normalize(z, p=2, dim=1)
