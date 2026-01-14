@@ -321,6 +321,30 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Print settings
+    print("=" * 60)
+    print("Settings:")
+    print(f"  Model:        {args.model}")
+    print(f"  Layer:        {args.layer}")
+    print(f"  Output dim:   {args.out_dim}")
+    print(f"  Pooling:      {args.pooling}")
+    print(f"  MLP head:     {args.mlp_head}" + (f" (hidden={args.mlp_hidden})" if args.mlp_head else ""))
+    print(f"  Temperature:  {args.temperature}")
+    print(f"  LR:           {args.lr}")
+    if args.steps:
+        print(f"  Steps:        {args.steps:,}")
+    else:
+        print(f"  Total tokens: {args.total_tokens:,}")
+    print(f"  Batch tokens: {args.max_batch_tokens}")
+    print(f"  Max length:   {args.max_length}")
+    print(f"  Lang set:     {args.lang_set} ({args.num_langs} pairs)")
+    print(f"  Val pairs:    {len(args.val_pairs)} pairs, {args.val_size} examples")
+    print(f"  Adaptive:     {args.adaptive_sampling}")
+    print(f"  Devices:      train={args.train_device}, val={args.val_device}")
+    print(f"  Output:       {args.output_dir}")
+    print(f"  Seed:         {args.seed}")
+    print("=" * 60)
+
     # Set seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
