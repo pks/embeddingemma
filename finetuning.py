@@ -312,7 +312,7 @@ def parse_args():
                         help="Adjust sampling weights based on validation loss (oversample hard pairs)")
 
     # Output
-    parser.add_argument("--output-dir", type=str, default=".",
+    parser.add_argument("--output-dir", type=str, default="./checkpoints",
                         help="Directory to save checkpoints")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
