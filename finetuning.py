@@ -1,7 +1,5 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel
 from datasets import load_dataset, interleave_datasets
 import threading
 from tqdm import tqdm
@@ -11,6 +9,8 @@ import argparse
 import random
 import os
 import langcodes
+
+from common import Embedder, load_tokenizer, load_base_model
 
 
 def normalize_lang(code):
@@ -224,29 +224,6 @@ VALIDATION_PAIRS = [
 ]
 
 
-class Embedder(nn.Module):
-    def __init__(self, base_model, out_dim=768, layer=-4):
-        super().__init__()
-        self.base = base_model
-        self.layer = layer
-        hidden = base_model.config.hidden_size
-        self.proj = nn.Linear(hidden, out_dim, bias=False)
-
-    def forward(self, input_ids, attention_mask):
-        out = self.base(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-        h = out.hidden_states[self.layer]
-        mask = attention_mask.unsqueeze(-1)
-        pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1)
-        z = self.proj(pooled)
-        z = F.normalize(z, p=2, dim=1)
-        return z
-
-
 def contrastive_loss(a, b, temp=0.05):
     """Contrastive loss for normalized embeddings."""
     logits = (a @ b.T) / temp
@@ -344,9 +321,7 @@ def main():
 
     # Load tokenizer
     print(f"Loading tokenizer from {args.model}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True, legacy=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = load_tokenizer(args.model)
 
     def tokenize(texts, max_length, device):
         batch = tokenizer(texts, padding=True, truncation=True, max_length=max_length, return_tensors="pt")
@@ -354,19 +329,13 @@ def main():
 
     # Load base model for training
     print(f"Loading base model on {args.train_device}...")
-    base = AutoModel.from_pretrained(args.model, dtype=torch.bfloat16, device_map=args.train_device)
-    base.eval()
-    for p in base.parameters():
-        p.requires_grad = False
+    base = load_base_model(args.model, args.train_device)
 
     # Load base model for validation (separate copy if different device)
     if args.val_device != args.train_device:
         torch.cuda.empty_cache()
         print(f"Loading validation model on {args.val_device}...")
-        val_base = AutoModel.from_pretrained(args.model, dtype=torch.bfloat16, device_map=args.val_device)
-        val_base.eval()
-        for p in val_base.parameters():
-            p.requires_grad = False
+        val_base = load_base_model(args.model, args.val_device)
     else:
         val_base = base
 
