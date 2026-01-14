@@ -331,6 +331,7 @@ def main():
     # Disable progress bars if requested
     if args.no_progress:
         os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["TQDM_DISABLE"] = "1"
         hf_logging.set_verbosity_error()
         disable_datasets_progress()
 

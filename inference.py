@@ -63,6 +63,7 @@ if __name__ == "__main__":
     # Disable progress bars if requested
     if args.no_progress:
         os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["TQDM_DISABLE"] = "1"
         hf_logging.set_verbosity_error()
 
     texts = args.texts if args.texts else EXAMPLE_TEXTS
