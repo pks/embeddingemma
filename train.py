@@ -605,14 +605,14 @@ def main():
             avg_tok = n_toks / (n_examples * 2) if n_examples > 0 else 0
             print(f"Stats: {n_examples:,} examples, {n_langs} langs, {n_toks:,} toks, {avg_tok:.1f} avg tok/sent", flush=True)
             if args.verbose:
-                # Verbose: full per-language stats
+                # Verbose: full per-language stats (all languages and pairs)
                 print("  Tokens per language:", flush=True)
-                for lang, toks in lang_tokens.most_common(top_n * 2):
+                for lang, toks in lang_tokens.most_common():
                     sents = lang_sents[lang]
                     avg = toks / sents if sents > 0 else 0
                     print(f"    {lang}: {toks:,} ({100*toks/n_toks:.1f}%, {avg:.1f} avg)", flush=True)
                 print("  Examples per language pair:", flush=True)
-                for pair, count in pair_examples.most_common(top_n * 2):
+                for pair, count in pair_examples.most_common():
                     print(f"    {pair}: {count:,} ({100*count/n_examples:.1f}%)", flush=True)
             else:
                 # Compact: top languages on one line

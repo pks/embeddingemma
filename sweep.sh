@@ -60,8 +60,8 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                         --train-pairs $train_pairs \
                         --val-pairs $VAL_PAIRS \
                         --output-dir "$outdir" \
-                        --no-progress -v \
-                        2>&1 | tee "$outdir.log"
+                        -v \
+                        | tee "$outdir.log"
 
                     # Run inference with trained checkpoint
                     echo "Running inference..."
@@ -70,8 +70,7 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                         --layer "$layer" \
                         --pooling "$pooling" \
                         $mlp_flag \
-                        --no-progress \
-                        2>&1 | tee -a "$outdir.log"
+                        | tee -a "$outdir.log"
                 done
             done
         done
