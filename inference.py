@@ -35,7 +35,7 @@ def parse_args():
                         help="Pooling strategy: mean, last, or attention")
     parser.add_argument("--mlp-head", action="store_true",
                         help="Use MLP projection head (must match training)")
-    parser.add_argument("--mlp-hidden", type=int, default=None,
+    parser.add_argument("--mlp-hidden", type=int, default=2048,
                         help="Hidden dimension for MLP head (must match training)")
 
     # Inference

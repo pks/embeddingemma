@@ -264,8 +264,8 @@ def parse_args():
                         help="Pooling strategy: mean, last, or attention")
     parser.add_argument("--mlp-head", action="store_true",
                         help="Use MLP projection head (Linear->ReLU->Linear) instead of single Linear")
-    parser.add_argument("--mlp-hidden", type=int, default=None,
-                        help="Hidden dimension for MLP head (default: same as base model hidden size)")
+    parser.add_argument("--mlp-hidden", type=int, default=2048,
+                        help="Hidden dimension for MLP head")
 
     # Devices
     parser.add_argument("--train-device", type=str, default="cuda:0",
