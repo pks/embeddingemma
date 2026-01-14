@@ -47,7 +47,7 @@ def load_tokenizer(model_id):
 
 def load_base_model(model_id, device="cuda"):
     """Load frozen base model."""
-    base = AutoModel.from_pretrained(model_id, torch_dtype=torch.bfloat16, device_map=device)
+    base = AutoModel.from_pretrained(model_id, dtype=torch.bfloat16, device_map=device)
     base.eval()
     for p in base.parameters():
         p.requires_grad = False
