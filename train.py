@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Fine-tune multilingual embeddings using contrastive learning."""
 
+import sys
 import os
+
+# Check for --no-progress early, before imports
+if "--no-progress" in sys.argv:
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    os.environ["TQDM_DISABLE"] = "1"
+
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset, interleave_datasets, disable_progress_bars as disable_datasets_progress
@@ -328,10 +335,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Disable progress bars if requested
+    # Disable progress bars if requested (env vars already set at top of file)
     if args.no_progress:
-        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-        os.environ["TQDM_DISABLE"] = "1"
         hf_logging.set_verbosity_error()
         disable_datasets_progress()
 

@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Run inference with trained embedder or sentence-transformer baseline."""
 
+import sys
 import os
+
+# Check for --no-progress early, before imports
+if "--no-progress" in sys.argv:
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    os.environ["TQDM_DISABLE"] = "1"
+
 import argparse
 import torch
 from transformers import logging as hf_logging
@@ -60,10 +67,8 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # Disable progress bars if requested
+    # Disable progress bars if requested (env vars already set at top of file)
     if args.no_progress:
-        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-        os.environ["TQDM_DISABLE"] = "1"
         hf_logging.set_verbosity_error()
 
     texts = args.texts if args.texts else EXAMPLE_TEXTS
