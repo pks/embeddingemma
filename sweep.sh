@@ -70,6 +70,7 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                         --layer "$layer" \
                         --pooling "$pooling" \
                         $mlp_flag \
+                        --no-progress \
                         2>&1 | tee -a "$outdir.log"
                 done
             done

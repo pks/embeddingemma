@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Run inference with trained embedder or sentence-transformer baseline."""
 
+import os
 import argparse
 import torch
+from transformers import logging as hf_logging
 
 from common import EXAMPLE_TEXTS, load_tokenizer, load_embedder, print_similarity_results, POOLING_MODES
 
@@ -48,11 +50,20 @@ def parse_args():
     parser.add_argument("--texts", type=str, nargs="+",
                         help="Texts to embed (if not provided, runs example)")
 
+    # Output
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable progress bars")
+
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
+    # Disable progress bars if requested
+    if args.no_progress:
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        hf_logging.set_verbosity_error()
 
     texts = args.texts if args.texts else EXAMPLE_TEXTS
 
