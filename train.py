@@ -298,8 +298,8 @@ def parse_args():
                         help="Save checkpoint every N steps (when using --steps)")
     parser.add_argument("--checkpoint-tokens", type=parse_num, default="1M",
                         help="Save checkpoint every N tokens (e.g. 100K, 1M)")
-    parser.add_argument("--val-count", type=int, default=2,
-                        help="Number of validations during training (evenly spaced + final)")
+    parser.add_argument("--val-count", type=int, default=None,
+                        help="Number of validations (evenly spaced). Default: validate at every checkpoint.")
 
     # Data
     parser.add_argument("--lang-set", type=str, default="curated", choices=["all", "curated"],
@@ -352,8 +352,10 @@ def main():
     print(f"  LR:           {args.lr}")
     if args.steps:
         print(f"  Steps:        {args.steps:,}")
+        print(f"  Checkpoint:   every {args.checkpoint_steps} steps")
     else:
         print(f"  Total tokens: {args.total_tokens:,}")
+        print(f"  Checkpoint:   every {args.checkpoint_tokens:,} tokens")
     print(f"  Batch tokens: {args.max_batch_tokens}")
     print(f"  Max length:   {args.max_length}")
     if args.train_pairs:
@@ -361,7 +363,10 @@ def main():
     else:
         print(f"  Lang set:     {args.lang_set} ({args.num_langs} pairs)")
     print(f"  Val pairs:    {len(args.val_pairs)} pairs, {args.val_size} examples")
-    print(f"  Val count:    {args.val_count}")
+    if args.val_count:
+        print(f"  Validation:   {args.val_count} times (evenly spaced)")
+    else:
+        print(f"  Validation:   at every checkpoint")
     print(f"  Adaptive:     {args.adaptive_sampling}")
     print(f"  Devices:      train={args.train_device}, val={args.val_device}")
     print(f"  Output:       {args.output_dir}")
@@ -700,11 +705,12 @@ def main():
     tokens_processed = 0
     step = 0
     val_idx = 0  # Next validation index
+    next_checkpoint = args.checkpoint_steps if args.steps else args.checkpoint_tokens
     use_steps = args.steps is not None
 
-    # Calculate validation points (evenly spaced)
+    # Calculate validation points (evenly spaced) - only if --val-count is set
     total_budget = args.steps if use_steps else args.total_tokens
-    val_points = [total_budget * (i + 1) // args.val_count for i in range(args.val_count)]
+    val_points = [total_budget * (i + 1) // args.val_count for i in range(args.val_count)] if args.val_count else []
 
     if use_steps:
         pbar = tqdm(total=args.steps, desc="Training", unit="step", disable=args.no_progress)
@@ -716,9 +722,18 @@ def main():
             return step < args.steps
         return tokens_processed < args.total_tokens
 
-    def should_validate():
+    def should_checkpoint():
+        nonlocal next_checkpoint
+        progress = step if use_steps else tokens_processed
+        if progress >= next_checkpoint:
+            next_checkpoint += args.checkpoint_steps if use_steps else args.checkpoint_tokens
+            return True
+        return False
+
+    def should_validate_by_count():
+        """Check if we should validate based on --val-count points."""
         nonlocal val_idx
-        if val_idx >= len(val_points):
+        if not val_points or val_idx >= len(val_points):
             return False
         progress = step if use_steps else tokens_processed
         if progress >= val_points[val_idx]:
@@ -748,7 +763,19 @@ def main():
             val=f"{val_loss_result[0]:.4f}" if val_loss_result[0] else "..."
         )
 
-        if should_validate():
+        # Checkpoint saving (based on --checkpoint-tokens or --checkpoint-steps)
+        do_checkpoint = should_checkpoint()
+        # Validation: at --val-count points if set, otherwise at every checkpoint (default)
+        do_validate = should_validate_by_count() if args.val_count else do_checkpoint
+
+        if do_checkpoint:
+            ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
+            torch.save(embedder.proj.state_dict(), ckpt_path)
+            if args.pooling == "attention":
+                torch.save({'attn_query': embedder.attn_query.data},
+                           ckpt_path.replace('.pt', '_attn.pt'))
+
+        if do_validate:
             # Wait for previous validation
             if val_thread is not None:
                 val_thread.join()
@@ -761,18 +788,15 @@ def main():
             # Update progress bar with validation result
             pbar.set_postfix(train=f"{loss.detach().item():.4f}", val=f"{val_loss_result[0]:.4f}")
 
-            # Save checkpoint
-            ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
-            torch.save(embedder.proj.state_dict(), ckpt_path)
-            if args.pooling == "attention":
-                torch.save({'attn_query': embedder.attn_query.data},
-                           ckpt_path.replace('.pt', '_attn.pt'))
-
-            # Print checkpoint info
+            # Print checkpoint/validation info
             pbar.clear()
             print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}, val={val_loss_result[0]:.4f}", flush=True)
             print_stats()
             update_sampling_weights()
+            pbar.refresh()
+        elif do_checkpoint:
+            pbar.clear()
+            print(f"\nCheckpoint: {tokens_processed:,} tokens, train={loss.detach().item():.4f}", flush=True)
             pbar.refresh()
 
     pbar.close()
