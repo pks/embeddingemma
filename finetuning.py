@@ -318,6 +318,8 @@ def parse_args():
                         help="Random seed")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Verbose output (show per-language and per-pair details)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable progress bars")
 
     return parser.parse_args()
 
@@ -419,7 +421,7 @@ def main():
     if args.adaptive_sampling:
         # Keep individual iterators for weighted sampling
         pair_iterators = {}
-        for lp in tqdm(selected_pairs, desc="Loading language pairs"):
+        for lp in tqdm(selected_pairs, desc="Loading language pairs", disable=args.no_progress):
             ds = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
             ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
             pair_iterators[lp] = iter(ds)
@@ -428,7 +430,7 @@ def main():
     else:
         datasets = [
             load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
-            for lp in tqdm(selected_pairs, desc="Loading language pairs")
+            for lp in tqdm(selected_pairs, desc="Loading language pairs", disable=args.no_progress)
         ]
         dataset = interleave_datasets(datasets)
         dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
@@ -692,9 +694,9 @@ def main():
     val_points = [total_budget * (i + 1) // args.val_count for i in range(args.val_count)]
 
     if use_steps:
-        pbar = tqdm(total=args.steps, desc="Training", unit="step")
+        pbar = tqdm(total=args.steps, desc="Training", unit="step", disable=args.no_progress)
     else:
-        pbar = tqdm(total=args.total_tokens, desc="Training", unit="tok")
+        pbar = tqdm(total=args.total_tokens, desc="Training", unit="tok", disable=args.no_progress)
 
     def should_continue():
         if use_steps:

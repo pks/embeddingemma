@@ -60,6 +60,7 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                         --train-pairs $train_pairs \
                         --val-pairs $VAL_PAIRS \
                         --output-dir "$outdir" \
+                        --no-progress \
                         2>&1 | tee "$outdir.log"
 
                     # Run inference with trained checkpoint
