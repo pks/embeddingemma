@@ -693,7 +693,7 @@ def main():
             except StopIteration:
                 break
 
-    prefetch_thread = threading.Thread(target=prefetch_worker)
+    prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
     prefetch_thread.start()
 
     # Training loop
@@ -779,7 +779,13 @@ def main():
 
     # Cleanup
     stop_prefetch.set()
-    prefetch_thread.join()
+    # Drain the queue to unblock prefetch thread
+    while not batch_queue.empty():
+        try:
+            batch_queue.get_nowait()
+        except:
+            break
+    prefetch_thread.join(timeout=1.0)
     if val_thread is not None:
         val_thread.join()
 
