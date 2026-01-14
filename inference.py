@@ -4,7 +4,7 @@
 import argparse
 import torch
 
-from common import EXAMPLE_TEXTS, load_tokenizer, load_embedder, print_similarity_results
+from common import EXAMPLE_TEXTS, load_tokenizer, load_embedder, print_similarity_results, POOLING_MODES
 
 
 def embed(embedder, texts, tokenizer, max_length=512, device="cuda"):
@@ -31,6 +31,10 @@ def parse_args():
                         help="Output embedding dimension")
     parser.add_argument("--layer", type=int, default=-1,
                         help="Hidden layer to extract embeddings from")
+    parser.add_argument("--pooling", type=str, default="mean", choices=POOLING_MODES,
+                        help="Pooling strategy: mean, last, or attention")
+    parser.add_argument("--mlp-head", action="store_true",
+                        help="Use MLP projection head (must match training)")
 
     # Inference
     parser.add_argument("--device", type=str, default="cuda",
@@ -61,7 +65,9 @@ if __name__ == "__main__":
             model_id=args.model,
             out_dim=args.out_dim,
             layer=args.layer,
-            device=args.device
+            device=args.device,
+            pooling=args.pooling,
+            mlp_head=args.mlp_head
         )
 
         embeddings = embed(embedder, texts, tokenizer, max_length=args.max_length, device=args.device)

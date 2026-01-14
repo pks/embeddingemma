@@ -13,7 +13,7 @@ import random
 import os
 import langcodes
 
-from common import Embedder, load_tokenizer, load_base_model
+from common import Embedder, load_tokenizer, load_base_model, POOLING_MODES
 
 
 def normalize_lang(code):
@@ -260,6 +260,10 @@ def parse_args():
                         help="Output embedding dimension")
     parser.add_argument("--layer", type=int, default=-1,
                         help="Hidden layer to extract embeddings from")
+    parser.add_argument("--pooling", type=str, default="mean", choices=POOLING_MODES,
+                        help="Pooling strategy: mean, last, or attention")
+    parser.add_argument("--mlp-head", action="store_true",
+                        help="Use MLP projection head (Linear->ReLU->Linear) instead of single Linear")
 
     # Devices
     parser.add_argument("--train-device", type=str, default="cuda:0",
@@ -343,9 +347,11 @@ def main():
         val_base = base
 
     # Create embedder(s)
-    embedder = Embedder(base, out_dim=args.out_dim, layer=args.layer).to(dtype=torch.bfloat16, device=args.train_device).train()
+    embedder = Embedder(base, out_dim=args.out_dim, layer=args.layer, pooling=args.pooling,
+                        mlp_head=args.mlp_head).to(dtype=torch.bfloat16, device=args.train_device).train()
     if args.val_device != args.train_device:
-        val_embedder = Embedder(val_base, out_dim=args.out_dim, layer=args.layer).to(dtype=torch.bfloat16, device=args.val_device).eval()
+        val_embedder = Embedder(val_base, out_dim=args.out_dim, layer=args.layer, pooling=args.pooling,
+                                mlp_head=args.mlp_head).to(dtype=torch.bfloat16, device=args.val_device).eval()
     else:
         val_embedder = None  # Use embedder for validation when on same device
 
@@ -693,6 +699,9 @@ def main():
             # Save checkpoint
             ckpt_path = os.path.join(args.output_dir, f"embedder_{tokens_processed // 1000}k.pt")
             torch.save(embedder.proj.state_dict(), ckpt_path)
+            if args.pooling == "attention":
+                torch.save({'attn_query': embedder.attn_query.data},
+                           ckpt_path.replace('.pt', '_attn.pt'))
 
             # Print checkpoint info
             pbar.clear()
@@ -717,6 +726,9 @@ def main():
     # Save final model
     final_path = os.path.join(args.output_dir, "embedder.pt")
     torch.save(embedder.proj.state_dict(), final_path)
+    if args.pooling == "attention":
+        torch.save({'attn_query': embedder.attn_query.data},
+                   final_path.replace('.pt', '_attn.pt'))
     print(f"Model saved to {final_path}")
 
 

@@ -13,14 +13,31 @@ EXAMPLE_TEXTS = [
     "I like apples.",
 ]
 
+POOLING_MODES = ["mean", "last", "attention"]
+
 
 class Embedder(nn.Module):
-    def __init__(self, base_model, out_dim=768, layer=-1):
+    def __init__(self, base_model, out_dim=768, layer=-1, pooling="mean", mlp_head=False):
         super().__init__()
         self.base = base_model
         self.layer = layer
+        self.pooling = pooling
+        self.mlp_head = mlp_head
         hidden = base_model.config.hidden_size
-        self.proj = nn.Linear(hidden, out_dim, bias=False)
+
+        # Attention pooling: learnable query vector
+        if pooling == "attention":
+            self.attn_query = nn.Parameter(torch.randn(hidden))
+
+        # Projection head
+        if mlp_head:
+            self.proj = nn.Sequential(
+                nn.Linear(hidden, hidden, bias=False),
+                nn.ReLU(),
+                nn.Linear(hidden, out_dim, bias=False),
+            )
+        else:
+            self.proj = nn.Linear(hidden, out_dim, bias=False)
 
     def forward(self, input_ids, attention_mask):
         out = self.base(
@@ -29,9 +46,23 @@ class Embedder(nn.Module):
             output_hidden_states=True,
             return_dict=True,
         )
-        h = out.hidden_states[self.layer]
-        mask = attention_mask.unsqueeze(-1)
-        pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1)
+        h = out.hidden_states[self.layer]  # (batch, seq, hidden)
+
+        # Pooling
+        if self.pooling == "mean":
+            mask = attention_mask.unsqueeze(-1)
+            pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1)
+        elif self.pooling == "last":
+            # Get last non-padded token for each sequence
+            seq_lens = attention_mask.sum(dim=1) - 1  # (batch,)
+            pooled = h[torch.arange(h.size(0), device=h.device), seq_lens]
+        elif self.pooling == "attention":
+            # Attention pooling with learnable query
+            scores = torch.matmul(h, self.attn_query)  # (batch, seq)
+            scores = scores.masked_fill(attention_mask == 0, float('-inf'))
+            weights = F.softmax(scores, dim=1).unsqueeze(-1)  # (batch, seq, 1)
+            pooled = (h * weights).sum(1)  # (batch, hidden)
+
         z = self.proj(pooled)
         z = F.normalize(z, p=2, dim=1)
         return z
@@ -54,11 +85,21 @@ def load_base_model(model_id, device="cuda"):
     return base
 
 
-def load_embedder(checkpoint_path, model_id, out_dim=768, layer=-1, device="cuda"):
+def load_embedder(checkpoint_path, model_id, out_dim=768, layer=-1, device="cuda",
+                  pooling="mean", mlp_head=False):
     """Load embedder with trained projection weights."""
     base = load_base_model(model_id, device)
-    embedder = Embedder(base, out_dim=out_dim, layer=layer).to(dtype=torch.bfloat16, device=device)
+    embedder = Embedder(base, out_dim=out_dim, layer=layer, pooling=pooling,
+                        mlp_head=mlp_head).to(dtype=torch.bfloat16, device=device)
     embedder.proj.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
+    # Load attention query if present
+    if pooling == "attention":
+        try:
+            attn_state = torch.load(checkpoint_path.replace('.pt', '_attn.pt'),
+                                    map_location=device, weights_only=True)
+            embedder.attn_query.data = attn_state['attn_query']
+        except FileNotFoundError:
+            pass  # Use random init if no saved attention weights
     embedder.eval()
     return embedder
 
