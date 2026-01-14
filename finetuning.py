@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""Fine-tune multilingual embeddings using contrastive learning."""
+
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset, interleave_datasets

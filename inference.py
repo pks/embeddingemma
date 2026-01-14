@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Run inference with trained embedder."""
 
 import argparse
