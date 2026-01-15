@@ -52,6 +52,10 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                     echo "Running: train=$train_name pooling=$pooling mlp=$mlp layer=$layer temp=$temp"
                     echo "========================================"
 
+                    # Add run separator to log (with timestamp)
+                    echo "" >> "$outdir.log"
+                    echo "=== Run started: $(date) ===" >> "$outdir.log"
+
                     ./train.py \
                         --layer "$layer" \
                         --temperature "$temp" \
@@ -61,7 +65,7 @@ for config in "${TRAIN_CONFIGS[@]}"; do
                         --val-pairs $VAL_PAIRS \
                         --output-dir "$outdir" \
                         -v \
-                        | tee "$outdir.log"
+                        | tee -a "$outdir.log"
 
                     # Run inference with trained checkpoint
                     echo "Running inference..."
