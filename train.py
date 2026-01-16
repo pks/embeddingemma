@@ -19,6 +19,7 @@ from queue import Queue
 from collections import Counter
 import argparse
 import random
+import re
 import langcodes
 
 from common import Embedder, load_tokenizer, load_base_model, POOLING_MODES
@@ -258,6 +259,26 @@ def parse_num(s):
     return int(s)
 
 
+def find_latest_checkpoint(output_dir):
+    """Find the latest checkpoint in output_dir, return (path, tokens) or (None, 0)."""
+    if not os.path.exists(output_dir):
+        return None, 0
+
+    pattern = re.compile(r'embedder_(\d+)k\.pt$')
+    latest_path = None
+    latest_tokens = 0
+
+    for fname in os.listdir(output_dir):
+        match = pattern.match(fname)
+        if match:
+            tokens = int(match.group(1)) * 1000
+            if tokens > latest_tokens:
+                latest_tokens = tokens
+                latest_path = os.path.join(output_dir, fname)
+
+    return latest_path, latest_tokens
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune multilingual embeddings")
 
@@ -328,6 +349,8 @@ def parse_args():
                         help="Verbose output (show per-language and per-pair details)")
     parser.add_argument("--no-progress", action="store_true",
                         help="Disable progress bars")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Start fresh even if checkpoints exist in output-dir")
 
     return parser.parse_args()
 
@@ -408,6 +431,20 @@ def main():
                                 mlp_head=args.mlp_head, mlp_hidden=args.mlp_hidden).to(dtype=torch.bfloat16, device=args.val_device).eval()
     else:
         val_embedder = None  # Use embedder for validation when on same device
+
+    # Check for existing checkpoint to resume from
+    if args.no_resume:
+        resume_checkpoint, resume_tokens = None, 0
+    else:
+        resume_checkpoint, resume_tokens = find_latest_checkpoint(args.output_dir)
+    if resume_checkpoint:
+        print(f"Resuming from checkpoint: {resume_checkpoint} ({resume_tokens:,} tokens)")
+        embedder.proj.load_state_dict(torch.load(resume_checkpoint, map_location=args.train_device, weights_only=True))
+        if args.pooling == "attention":
+            attn_path = resume_checkpoint.replace('.pt', '_attn.pt')
+            if os.path.exists(attn_path):
+                attn_state = torch.load(attn_path, map_location=args.train_device, weights_only=True)
+                embedder.attn_query.data = attn_state['attn_query']
 
     # Optimizer
     opt = torch.optim.AdamW(embedder.parameters(), lr=args.lr)
@@ -702,20 +739,32 @@ def main():
     prefetch_thread.start()
 
     # Training loop
-    tokens_processed = 0
+    tokens_processed = resume_tokens
     step = 0
     val_idx = 0  # Next validation index
-    next_checkpoint = args.checkpoint_steps if args.steps else args.checkpoint_tokens
     use_steps = args.steps is not None
+
+    # Calculate next checkpoint position (after resumed position)
+    checkpoint_interval = args.checkpoint_steps if use_steps else args.checkpoint_tokens
+    if resume_tokens > 0:
+        # Skip past already-completed checkpoints
+        next_checkpoint = ((resume_tokens // checkpoint_interval) + 1) * checkpoint_interval
+    else:
+        next_checkpoint = checkpoint_interval
 
     # Calculate validation points (evenly spaced) - only if --val-count is set
     total_budget = args.steps if use_steps else args.total_tokens
     val_points = [total_budget * (i + 1) // args.val_count for i in range(args.val_count)] if args.val_count else []
 
+    # Skip past already-completed validation points when resuming
+    if resume_tokens > 0 and val_points:
+        while val_idx < len(val_points) and val_points[val_idx] <= resume_tokens:
+            val_idx += 1
+
     if use_steps:
         pbar = tqdm(total=args.steps, desc="Training", unit="step", disable=args.no_progress)
     else:
-        pbar = tqdm(total=args.total_tokens, desc="Training", unit="tok", disable=args.no_progress)
+        pbar = tqdm(total=args.total_tokens, initial=resume_tokens, desc="Training", unit="tok", disable=args.no_progress)
 
     def should_continue():
         if use_steps:
@@ -726,7 +775,7 @@ def main():
         nonlocal next_checkpoint
         progress = step if use_steps else tokens_processed
         if progress >= next_checkpoint:
-            next_checkpoint += args.checkpoint_steps if use_steps else args.checkpoint_tokens
+            next_checkpoint += checkpoint_interval
             return True
         return False
 
