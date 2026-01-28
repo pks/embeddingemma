@@ -101,3 +101,39 @@ if __name__ == "__main__":
         embeddings = model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
 
     print_similarity_results(embeddings, texts)
+
+    # Summary check for EXAMPLE_TEXTS
+    if not args.texts and len(texts) == 5:
+        import torch.nn.functional as F
+
+        # Normalize embeddings for cosine similarity (float32 for precision)
+        normed = F.normalize(embeddings.float(), dim=1)
+        sim_matrix = normed @ normed.T
+
+        # Sentences 0-3: same meaning (different languages)
+        # Sentence 4: different meaning
+        # Distance = 1 - cosine_similarity
+        same_meaning_dists = []
+        for i in range(4):
+            for j in range(i + 1, 4):
+                same_meaning_dists.append(1 - sim_matrix[i, j].item())
+        avg_same_dist = sum(same_meaning_dists) / len(same_meaning_dists)
+
+        # Distance of sentence 4 to sentences 0-3
+        diff_meaning_dists = [1 - sim_matrix[4, i].item() for i in range(4)]
+        avg_diff_dist = sum(diff_meaning_dists) / len(diff_meaning_dists)
+
+        # Diagonal: self-distance should be 0
+        diagonal = [1 - sim_matrix[i, i].item() for i in range(len(texts))]
+        max_diag = max(abs(d) for d in diagonal)
+
+        # Gap: different-meaning should be farther than same-meaning
+        gap = avg_diff_dist - avg_same_dist
+
+        print("\n" + "=" * 50)
+        print("EXAMPLE_TEXTS Summary:")
+        print(f"  Avg distance (same meaning, sentences 1-4): {avg_same_dist:.3f}")
+        print(f"  Avg distance (different meaning, sentence 5 vs others): {avg_diff_dist:.3f}")
+        print(f"  Gap: {gap:.3f}")
+        print(f"  Diagonal (self-distance, should be 0): max={max_diag:.6f}")
+        print("=" * 50)
