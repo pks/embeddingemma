@@ -114,8 +114,9 @@ def print_similarity_results(embeddings, texts):
     """Print embeddings shape and cosine distance matrix."""
     print(f"Embeddings shape: {embeddings.shape}")
 
-    # Compute cosine distance (embeddings are L2-normalized, so dist = 1 - dot product)
-    sims = embeddings @ embeddings.T
+    # Normalize embeddings for cosine distance (float32 for precision)
+    normed = F.normalize(embeddings.float(), dim=1)
+    sims = normed @ normed.T
     dists = 1 - sims
     print(f"\nCosine distance matrix:")
     for i, t in enumerate(texts):
