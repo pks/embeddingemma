@@ -235,6 +235,117 @@ VALIDATION_PAIRS = [
     "tur_Latn-eng_Latn", "eng_Latn-tur_Latn",
 ]
 
+# ============================================================================
+# opus-100 dataset configuration
+# ============================================================================
+
+# Base configs available in opus-100 (alphabetically sorted pairs)
+_OPUS100_BASE_CONFIGS = [
+    "af-en", "am-en", "an-en", "ar-en", "as-en", "az-en", "be-en", "bg-en",
+    "bn-en", "br-en", "bs-en", "ca-en", "cs-en", "cy-en", "da-en", "de-en",
+    "dz-en", "el-en", "en-eo", "en-es", "en-et", "en-eu", "en-fa", "en-fi",
+    "en-fr", "en-fy", "en-ga", "en-gd", "en-gl", "en-gu", "en-ha", "en-he",
+    "en-hi", "en-hr", "en-hu", "en-hy", "en-id", "en-ig", "en-is", "en-it",
+    "en-ja", "en-ka", "en-kk", "en-km", "en-kn", "en-ko", "en-ku", "en-ky",
+    "en-li", "en-lt", "en-lv", "en-mg", "en-mk", "en-ml", "en-mn", "en-mr",
+    "en-ms", "en-mt", "en-my", "en-nb", "en-ne", "en-nl", "en-nn", "en-no",
+    "en-oc", "en-or", "en-pa", "en-pl", "en-ps", "en-pt", "en-ro", "en-ru",
+    "en-rw", "en-se", "en-sh", "en-si", "en-sk", "en-sl", "en-sq", "en-sr",
+    "en-sv", "en-ta", "en-te", "en-tg", "en-th", "en-tk", "en-tr", "en-tt",
+    "en-ug", "en-uk", "en-ur", "en-uz", "en-vi", "en-wa", "en-xh", "en-yi",
+    "en-yo", "en-zh", "en-zu",
+]
+
+def _make_bidirectional(pairs):
+    """Add reverse direction for each pair (e.g., de-en -> en-de)."""
+    result = []
+    for pair in pairs:
+        result.append(pair)
+        lang1, lang2 = pair.split("-")
+        reverse = f"{lang2}-{lang1}"
+        if reverse not in result:
+            result.append(reverse)
+    return result
+
+# All pairs in both directions
+OPUS100_LANG_PAIRS = _make_bidirectional(_OPUS100_BASE_CONFIGS)
+
+# Curated high-resource pairs for opus-100 (both directions)
+_OPUS100_CURATED_BASE = [
+    "de-en", "en-es", "en-fr", "en-it", "en-ja", "en-ko", "en-nl", "en-pl",
+    "en-pt", "en-ru", "en-zh", "ar-en", "en-hi", "en-tr", "en-vi", "en-id",
+    "en-th", "en-he", "en-fa", "cs-en", "en-ro", "en-hu", "en-sv", "da-en",
+    "en-fi", "el-en", "bg-en", "en-uk", "en-no", "en-sk",
+]
+OPUS100_CURATED_PAIRS = _make_bidirectional(_OPUS100_CURATED_BASE)
+
+# Validation pairs (both directions)
+_OPUS100_VAL_BASE = ["en-ja", "en-zh", "ar-en", "en-hi", "en-ru", "en-es", "de-en", "en-ko", "en-vi", "en-tr"]
+OPUS100_VALIDATION_PAIRS = _make_bidirectional(_OPUS100_VAL_BASE)
+
+
+# ============================================================================
+# Dataset abstraction layer
+# ============================================================================
+
+def _opus100_config_for_pair(pair):
+    """Get the actual opus-100 config name for a pair (may need to reverse)."""
+    if pair in _OPUS100_BASE_CONFIGS:
+        return pair, False  # config, is_reversed
+    lang1, lang2 = pair.split("-")
+    reverse = f"{lang2}-{lang1}"
+    if reverse in _OPUS100_BASE_CONFIGS:
+        return reverse, True
+    raise ValueError(f"No opus-100 config for pair: {pair}")
+
+
+def get_dataset_info(dataset_name):
+    """Get dataset-specific configuration."""
+    if dataset_name == "fineopus":
+        return {
+            "hf_name": "MaLA-LM/FineOPUS-ReLID",
+            "all_pairs": LANG_PAIRS,
+            "curated_pairs": CURATED_LANG_PAIRS,
+            "validation_pairs": VALIDATION_PAIRS,
+            "load_kwargs": lambda pair: {"data_dir": pair, "split": "train", "streaming": True},
+        }
+    elif dataset_name == "opus100":
+        def opus100_load_kwargs(pair):
+            config, _ = _opus100_config_for_pair(pair)
+            return {"name": config, "split": "train", "streaming": True}
+        return {
+            "hf_name": "Helsinki-NLP/opus-100",
+            "all_pairs": OPUS100_LANG_PAIRS,
+            "curated_pairs": OPUS100_CURATED_PAIRS,
+            "validation_pairs": OPUS100_VALIDATION_PAIRS,
+            "load_kwargs": opus100_load_kwargs,
+        }
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+
+def extract_texts(sample, dataset_name, pair):
+    """Extract source and target texts from a sample."""
+    if dataset_name == "fineopus":
+        return sample["source_text"], sample["target_text"]
+    elif dataset_name == "opus100":
+        config, is_reversed = _opus100_config_for_pair(pair)
+        config_lang1, config_lang2 = config.split("-")
+        trans = sample["translation"]
+        if is_reversed:
+            return trans[config_lang2], trans[config_lang1]
+        else:
+            return trans[config_lang1], trans[config_lang2]
+
+
+def extract_langs(sample, dataset_name, pair):
+    """Extract source and target language codes from a sample."""
+    if dataset_name == "fineopus":
+        return sample["orig_src_lang"], sample["orig_tgt_lang"]
+    elif dataset_name == "opus100":
+        lang1, lang2 = pair.split("-")
+        return lang1, lang2
+
 
 def contrastive_loss(a, b, temp=0.05):
     """Contrastive loss for normalized embeddings."""
@@ -323,8 +434,10 @@ def parse_args():
                         help="Number of validations (evenly spaced). Default: validate at every checkpoint.")
 
     # Data
+    parser.add_argument("--dataset", type=str, default="fineopus", choices=["fineopus", "opus100"],
+                        help="Dataset to use: 'fineopus' (MaLA-LM/FineOPUS-ReLID) or 'opus100' (Helsinki-NLP/opus-100)")
     parser.add_argument("--lang-set", type=str, default="curated", choices=["all", "curated"],
-                        help="Language pair set: 'all' (430 pairs) or 'curated' (69 high-resource pairs)")
+                        help="Language pair set: 'all' or 'curated' (high-resource pairs)")
     parser.add_argument("--num-langs", type=int, default=69,
                         help="Sample N language pairs from the set (default: use all in set)")
     parser.add_argument("--train-pairs", type=str, nargs="+", default=None,
@@ -363,9 +476,17 @@ def main():
         hf_logging.set_verbosity_error()
         disable_datasets_progress()
 
+    # Get dataset configuration
+    ds_info = get_dataset_info(args.dataset)
+
+    # Use dataset-specific default validation pairs if not explicitly set
+    if args.val_pairs == VALIDATION_PAIRS and args.dataset != "fineopus":
+        args.val_pairs = ds_info["validation_pairs"]
+
     # Print settings
     print("=" * 60)
     print("Settings:")
+    print(f"  Dataset:      {args.dataset} ({ds_info['hf_name']})")
     print(f"  Model:        {args.model}")
     print(f"  Layer:        {args.layer}")
     print(f"  Output dim:   {args.out_dim}")
@@ -458,7 +579,7 @@ def main():
             for lp in selected_pairs:
                 print(f"  {lp}")
     else:
-        base_pairs = CURATED_LANG_PAIRS if args.lang_set == "curated" else LANG_PAIRS
+        base_pairs = ds_info["curated_pairs"] if args.lang_set == "curated" else ds_info["all_pairs"]
         set_name = "curated" if args.lang_set == "curated" else "all"
 
         if args.num_langs is not None:
@@ -477,14 +598,14 @@ def main():
         # Keep individual iterators for weighted sampling
         pair_iterators = {}
         for lp in tqdm(selected_pairs, desc="Loading language pairs", disable=args.no_progress):
-            ds = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
+            ds = load_dataset(ds_info["hf_name"], **ds_info["load_kwargs"](lp))
             ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
             pair_iterators[lp] = iter(ds)
         sampling_weights = {lp: 1.0 for lp in selected_pairs}
         data_iter = None  # Will sample manually in get_batch
     else:
         datasets = [
-            load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=lp, split="train", streaming=True)
+            load_dataset(ds_info["hf_name"], **ds_info["load_kwargs"](lp))
             for lp in tqdm(selected_pairs, desc="Loading language pairs", disable=args.no_progress)
         ]
         dataset = interleave_datasets(datasets)
@@ -503,12 +624,12 @@ def main():
     total_val_batches = 0
     val_pair_info = []  # Collect for sorted output
     for val_pair in val_pairs:
-        val_dataset = load_dataset("MaLA-LM/FineOPUS-ReLID", data_dir=val_pair, split="train", streaming=True)
+        val_dataset = load_dataset(ds_info["hf_name"], **ds_info["load_kwargs"](val_pair))
         val_iter = iter(val_dataset)
         val_left, val_right, val_tokens = [], [], []
         while len(val_left) < per_pair_size:
             sample = next(val_iter)
-            src, tgt = sample["source_text"], sample["target_text"]
+            src, tgt = extract_texts(sample, args.dataset, val_pair)
             src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
             if src_tok > args.max_length or tgt_tok > args.max_length:
                 continue
@@ -592,14 +713,37 @@ def main():
     skipped_too_long = [0]
     stats_lock = threading.Lock()
 
-    def sample_from_pair():
-        """Sample one example from pair iterators based on weights."""
-        pairs = list(sampling_weights.keys())
-        weights = [sampling_weights[p] for p in pairs]
-        total_w = sum(weights)
-        probs = [w / total_w for w in weights]
-        chosen_pair = random.choices(pairs, weights=probs, k=1)[0]
-        return next(pair_iterators[chosen_pair])
+    # For non-adaptive opus-100, we need to track pairs since samples don't have lang info
+    # Use round-robin sampling from pair iterators instead of interleaved dataset
+    if args.dataset == "opus100" and not args.adaptive_sampling:
+        # Create iterators for each pair (same as adaptive mode)
+        pair_iterators = {}
+        for lp in selected_pairs:
+            ds = load_dataset(ds_info["hf_name"], **ds_info["load_kwargs"](lp))
+            ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
+            pair_iterators[lp] = iter(ds)
+        pair_cycle = iter(selected_pairs * 10000)  # Cycle through pairs
+
+    def sample_with_pair():
+        """Sample one example and return (sample, pair)."""
+        if args.adaptive_sampling:
+            # Weighted sampling based on validation loss
+            pairs = list(sampling_weights.keys())
+            weights = [sampling_weights[p] for p in pairs]
+            total_w = sum(weights)
+            probs = [w / total_w for w in weights]
+            chosen_pair = random.choices(pairs, weights=probs, k=1)[0]
+            return next(pair_iterators[chosen_pair]), chosen_pair
+        elif args.dataset == "opus100":
+            # Round-robin through pairs
+            chosen_pair = next(pair_cycle)
+            return next(pair_iterators[chosen_pair]), chosen_pair
+        else:
+            # fineopus non-adaptive: use interleaved dataset, extract pair from sample
+            sample = next(data_iter)
+            src_lang, tgt_lang = sample['orig_src_lang'], sample['orig_tgt_lang']
+            pair = f"{src_lang}-{tgt_lang}"
+            return sample, pair
 
     def get_batch():
         left, right = [], []
@@ -610,17 +754,15 @@ def main():
         batch_skipped = 0
         batch_examples = 0
         while total_tokens < args.max_batch_tokens:
-            if args.adaptive_sampling:
-                sample = sample_from_pair()
-            else:
-                sample = next(data_iter)
-            src, tgt = sample["source_text"], sample["target_text"]
+            sample, pair = sample_with_pair()
+            src, tgt = extract_texts(sample, args.dataset, pair)
             src_tok, tgt_tok = estimate_tokens(src), estimate_tokens(tgt)
             if src_tok > args.max_length or tgt_tok > args.max_length:
                 batch_skipped += 1
                 continue
-            src_lang = normalize_lang(sample['orig_src_lang'])
-            tgt_lang = normalize_lang(sample['orig_tgt_lang'])
+            src_lang, tgt_lang = extract_langs(sample, args.dataset, pair)
+            src_lang = normalize_lang(src_lang)
+            tgt_lang = normalize_lang(tgt_lang)
             batch_lang_tokens[src_lang] += src_tok
             batch_lang_tokens[tgt_lang] += tgt_tok
             batch_lang_sents[src_lang] += 1

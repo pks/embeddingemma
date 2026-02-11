@@ -10,3 +10,7 @@ wheels/
 .venv
 
 *.pt
+
+# Experiment outputs
+checkpoints/
+sweep_results/
