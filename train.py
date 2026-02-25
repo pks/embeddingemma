@@ -9,6 +9,7 @@ if "--no-progress" in sys.argv:
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     os.environ["TQDM_DISABLE"] = "1"
 
+import math
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset, interleave_datasets, disable_progress_bars as disable_datasets_progress
@@ -347,13 +348,76 @@ def extract_langs(sample, dataset_name, pair):
         return lang1, lang2
 
 
-def contrastive_loss(a, b, temp=0.05):
-    """Contrastive loss for normalized embeddings."""
-    logits = (a @ b.T) / temp
-    labels = torch.arange(a.size(0), device=a.device)
-    loss_i = F.cross_entropy(logits, labels)
-    loss_j = F.cross_entropy(logits.T, labels)
-    return (loss_i + loss_j) / 2
+def contrastive_loss(a, b, temp=0.05, hard_negs_for_a=None, hard_negs_for_b=None):
+    """Contrastive loss for normalized embeddings with optional hard negatives.
+
+    Args:
+        a: (N, D) normalized source embeddings.
+        b: (N, D) normalized target embeddings.
+        temp: Temperature scaling.
+        hard_negs_for_a: (N, K, D) hard negatives from b-side bank for a->b direction.
+        hard_negs_for_b: (N, K, D) hard negatives from a-side bank for b->a direction.
+    """
+    N = a.size(0)
+    labels = torch.arange(N, device=a.device)
+
+    # a -> b direction
+    logits_ab = (a @ b.T) / temp
+    if hard_negs_for_a is not None:
+        hn_logits = torch.bmm(a.unsqueeze(1), hard_negs_for_a.transpose(1, 2)).squeeze(1) / temp
+        logits_ab = torch.cat([logits_ab, hn_logits], dim=1)
+    loss_ab = F.cross_entropy(logits_ab, labels)
+
+    # b -> a direction
+    logits_ba = (b @ a.T) / temp
+    if hard_negs_for_b is not None:
+        hn_logits = torch.bmm(b.unsqueeze(1), hard_negs_for_b.transpose(1, 2)).squeeze(1) / temp
+        logits_ba = torch.cat([logits_ba, hn_logits], dim=1)
+    loss_ba = F.cross_entropy(logits_ba, labels)
+
+    return (loss_ab + loss_ba) / 2
+
+
+class NegativeBank:
+    """FIFO bank of recent detached embeddings for hard negative mining."""
+
+    def __init__(self, capacity, dim, device):
+        self.capacity = capacity
+        self.bank = torch.zeros(capacity, dim, dtype=torch.bfloat16, device=device)
+        self.size = 0
+        self.pointer = 0
+
+    @torch.no_grad()
+    def enqueue(self, embeddings):
+        """Add a batch of embeddings (FIFO, overwrites oldest)."""
+        n = embeddings.size(0)
+        if n >= self.capacity:
+            self.bank[:] = embeddings[-self.capacity:].detach()
+            self.size = self.capacity
+            self.pointer = 0
+            return
+        space = self.capacity - self.pointer
+        if n <= space:
+            self.bank[self.pointer:self.pointer + n] = embeddings.detach()
+        else:
+            self.bank[self.pointer:] = embeddings[:space].detach()
+            self.bank[:n - space] = embeddings[space:].detach()
+        self.pointer = (self.pointer + n) % self.capacity
+        self.size = min(self.size + n, self.capacity)
+
+    @torch.no_grad()
+    def find_hard_negatives(self, queries, k):
+        """Find top-k most similar bank entries for each query.
+
+        Returns (N, k, dim) tensor, or None if bank is empty.
+        """
+        if self.size == 0:
+            return None
+        valid = self.bank[:self.size]
+        sims = queries.float() @ valid.float().T
+        actual_k = min(k, self.size)
+        _, topk_idx = sims.topk(actual_k, dim=1)
+        return valid[topk_idx]
 
 
 def estimate_tokens(text):
@@ -418,6 +482,8 @@ def parse_args():
                         help="Learning rate")
     parser.add_argument("--temperature", type=float, default=0.05,
                         help="Temperature for contrastive loss (lower = sharper)")
+    parser.add_argument("--temp-start", type=float, default=None,
+                        help="Starting temperature for cosine decay schedule (decays to --temperature)")
     parser.add_argument("--steps", type=int, default=None,
                         help="Number of training steps (overrides --total-tokens)")
     parser.add_argument("--total-tokens", type=parse_num, default="10M",
@@ -430,6 +496,12 @@ def parse_args():
                         help="Save checkpoint every N steps (when using --steps)")
     parser.add_argument("--checkpoint-tokens", type=parse_num, default="1M",
                         help="Save checkpoint every N tokens (e.g. 100K, 1M)")
+    parser.add_argument("--neg-bank-size", type=int, default=0,
+                        help="Size of negative embedding bank for hard negative mining (0 = disabled)")
+    parser.add_argument("--neg-k", type=int, default=16,
+                        help="Number of hard negatives per sample from the bank")
+    parser.add_argument("--neg-warmup", type=int, default=10,
+                        help="Steps to fill the bank before mining hard negatives")
     parser.add_argument("--val-count", type=int, default=None,
                         help="Number of validations (evenly spaced). Default: validate at every checkpoint.")
 
@@ -492,7 +564,10 @@ def main():
     print(f"  Output dim:   {args.out_dim}")
     print(f"  Pooling:      {args.pooling}")
     print(f"  MLP head:     {args.mlp_head}" + (f" (hidden={args.mlp_hidden})" if args.mlp_head else ""))
-    print(f"  Temperature:  {args.temperature}")
+    if args.temp_start is not None:
+        print(f"  Temperature:  {args.temp_start} -> {args.temperature} (cosine decay)")
+    else:
+        print(f"  Temperature:  {args.temperature}")
     print(f"  LR:           {args.lr}")
     if args.steps:
         print(f"  Steps:        {args.steps:,}")
@@ -512,6 +587,9 @@ def main():
     else:
         print(f"  Validation:   at every checkpoint")
     print(f"  Adaptive:     {args.adaptive_sampling}")
+    if args.neg_bank_size > 0:
+        bank_mem = args.neg_bank_size * args.out_dim * 2 / 1024 / 1024
+        print(f"  Neg bank:     {args.neg_bank_size} x2 ({bank_mem:.0f} MB each), k={args.neg_k}, warmup={args.neg_warmup}")
     print(f"  Devices:      train={args.train_device}, val={args.val_device}")
     print(f"  Output:       {args.output_dir}")
     print(f"  Seed:         {args.seed}")
@@ -880,6 +958,15 @@ def main():
     prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
     prefetch_thread.start()
 
+    # Hard negative mining banks
+    if args.neg_bank_size > 0:
+        bank_a = NegativeBank(args.neg_bank_size, args.out_dim, args.train_device)
+        bank_b = NegativeBank(args.neg_bank_size, args.out_dim, args.train_device)
+        neg_warmup_remaining = args.neg_warmup
+    else:
+        bank_a = None
+        bank_b = None
+
     # Training loop
     tokens_processed = resume_tokens
     step = 0
@@ -907,6 +994,13 @@ def main():
         pbar = tqdm(total=args.steps, desc="Training", unit="step", disable=args.no_progress)
     else:
         pbar = tqdm(total=args.total_tokens, initial=resume_tokens, desc="Training", unit="tok", disable=args.no_progress)
+
+    def get_temperature():
+        if args.temp_start is None:
+            return args.temperature
+        progress = step / args.steps if use_steps else tokens_processed / args.total_tokens
+        progress = min(progress, 1.0)
+        return args.temperature + 0.5 * (args.temp_start - args.temperature) * (1 + math.cos(math.pi * progress))
 
     def should_continue():
         if use_steps:
@@ -938,7 +1032,21 @@ def main():
         a = embedder(**batch_l)
         b = embedder(**batch_r)
 
-        loss = contrastive_loss(a, b, args.temperature)
+        # Hard negative mining
+        hard_negs_a, hard_negs_b = None, None
+        if bank_a is not None:
+            if neg_warmup_remaining <= 0:
+                hard_negs_a = bank_b.find_hard_negatives(a.detach(), args.neg_k)
+                hard_negs_b = bank_a.find_hard_negatives(b.detach(), args.neg_k)
+            else:
+                neg_warmup_remaining -= 1
+            bank_a.enqueue(a)
+            bank_b.enqueue(b)
+
+        temp = get_temperature()
+        loss = contrastive_loss(a, b, temp,
+                                hard_negs_for_a=hard_negs_a,
+                                hard_negs_for_b=hard_negs_b)
 
         opt.zero_grad()
         loss.backward()
@@ -949,10 +1057,13 @@ def main():
         pbar.update(1 if use_steps else batch_tokens)
 
         # Update progress bar
-        pbar.set_postfix(
+        postfix = dict(
             train=f"{loss.detach().item():.4f}",
-            val=f"{val_loss_result[0]:.4f}" if val_loss_result[0] else "..."
+            val=f"{val_loss_result[0]:.4f}" if val_loss_result[0] else "...",
         )
+        if args.temp_start is not None:
+            postfix["temp"] = f"{temp:.4f}"
+        pbar.set_postfix(postfix)
 
         # Checkpoint saving (based on --checkpoint-tokens or --checkpoint-steps)
         do_checkpoint = should_checkpoint()

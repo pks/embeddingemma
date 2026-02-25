@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, logging as hf_logging
 
 EXAMPLE_TEXTS = [
     "Where is the train station?",
@@ -84,7 +84,9 @@ def load_tokenizer(model_id):
 
 def load_base_model(model_id, device="cuda"):
     """Load frozen base model."""
+    hf_logging.set_verbosity_error()
     base = AutoModel.from_pretrained(model_id, dtype=torch.bfloat16, device_map=device)
+    hf_logging.set_verbosity_warning()
     base.eval()
     for p in base.parameters():
         p.requires_grad = False

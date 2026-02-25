@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run inference on all sweep checkpoints using GNU parallel with 2 GPUs
 
-SWEEP_DIR="sweep_results"
+SWEEP_DIR="sweep"
 
 # Generate list of jobs
 generate_jobs() {
